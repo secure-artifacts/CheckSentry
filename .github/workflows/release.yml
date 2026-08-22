@@ -214,3 +214,106 @@ jobs:
             ${{ steps.package.outputs.checksum_path }}
           fail_on_unmatched_files: true
           generate_release_notes: true
+
+      - name: Verify Release assets and SLSA provenance
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $headers = @{
+            Authorization = "Bearer $env:GITHUB_TOKEN"
+            Accept = 'application/vnd.github+json'
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          $releaseUrl = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/tags/$env:GITHUB_REF_NAME"
+          $release = $null
+          for ($attempt = 1; $attempt -le 12; $attempt++) {
+            $candidateRelease = Invoke-RestMethod -Uri $releaseUrl -Headers $headers -Method Get
+            $candidateAssets = @($candidateRelease.assets)
+            if ($candidateRelease.tag_name -eq $env:GITHUB_REF_NAME -and $candidateAssets.Count -eq 2 -and
+                ($candidateAssets | Where-Object { [string]::IsNullOrWhiteSpace([string]$_.digest) }).Count -eq 0) {
+              $release = $candidateRelease
+              break
+            }
+            Start-Sleep -Seconds 5
+          }
+          if ($null -eq $release) {
+            throw "Release metadata or asset digests were not ready for tag $env:GITHUB_REF_NAME."
+          }
+          if ($release.tag_name -ne $env:GITHUB_REF_NAME) {
+            throw "Release tag mismatch: expected $env:GITHUB_REF_NAME, got $($release.tag_name)."
+          }
+
+          $expectedZipName = "CheckSentry-$env:GITHUB_REF_NAME.zip"
+          $expectedChecksumName = "$expectedZipName.sha256"
+          $expectedZipDigest = '${{ steps.package.outputs.sha256 }}'
+          $expectedChecksumDigest = (Get-FileHash -LiteralPath '${{ steps.package.outputs.checksum_path }}' -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expectedDigests = @{
+            $expectedZipName = $expectedZipDigest
+            $expectedChecksumName = $expectedChecksumDigest
+          }
+
+          $assets = @($release.assets)
+          if ($assets.Count -ne $expectedDigests.Count) {
+            throw "Unexpected Release asset count: expected $($expectedDigests.Count), got $($assets.Count)."
+          }
+
+          foreach ($asset in $assets) {
+            if ($asset.uploader.login -ne 'github-actions[bot]') {
+              throw "Release asset uploader is not github-actions[bot]: $($asset.name) / $($asset.uploader.login)"
+            }
+            if ($asset.name -notin $expectedDigests.Keys) {
+              throw "Unexpected Release asset: $($asset.name)"
+            }
+            $remoteDigest = ([string]$asset.digest).ToLowerInvariant()
+            $expectedDigest = 'sha256:' + $expectedDigests[$asset.name]
+            if ($remoteDigest -ne $expectedDigest) {
+              throw "Release asset digest mismatch: $($asset.name); expected $expectedDigest, got $remoteDigest."
+            }
+            if ($remoteDigest -notmatch '^sha256:[0-9a-f]{64}$') {
+              throw "Release asset has invalid SHA256 digest: $($asset.name)"
+            }
+
+            $digestHex = $remoteDigest.Substring(7)
+            $attestationUrl = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/attestations/sha256:$digestHex"
+            $attestation = $null
+            for ($attempt = 1; $attempt -le 12; $attempt++) {
+              try {
+                $candidate = Invoke-RestMethod -Uri $attestationUrl -Headers $headers -Method Get
+                if (@($candidate.attestations).Count -gt 0) {
+                  $attestation = $candidate
+                  break
+                }
+              } catch {
+                if ($attempt -eq 12) { throw }
+              }
+              Start-Sleep -Seconds 5
+            }
+            if ($null -eq $attestation -or @($attestation.attestations).Count -eq 0) {
+              throw "No Attestation found for Release asset: $($asset.name) / $remoteDigest"
+            }
+
+            $validProvenance = $false
+            foreach ($record in @($attestation.attestations)) {
+              try {
+                $payloadBytes = [Convert]::FromBase64String([string]$record.bundle.dsseEnvelope.payload)
+                $statement = ([Text.Encoding]::UTF8.GetString($payloadBytes) | ConvertFrom-Json)
+                $workflow = $statement.predicate.buildDefinition.externalParameters.workflow
+                $runnerEnvironment = [string]$statement.predicate.buildDefinition.internalParameters.github.runner_environment
+                if ($statement.predicateType -eq 'https://slsa.dev/provenance/v1' -and
+                    [string]$workflow.repository -eq "https://github.com/$env:GITHUB_REPOSITORY" -and
+                    [string]$workflow.ref -eq "refs/tags/$env:GITHUB_REF_NAME" -and
+                    $runnerEnvironment -eq 'github-hosted') {
+                  $validProvenance = $true
+                  break
+                }
+              } catch {
+                continue
+              }
+            }
+            if (-not $validProvenance) {
+              throw "No valid SLSA v1.0 provenance found for Release asset: $($asset.name)"
+            }
+          }
+          Write-Host "Release asset digest, uploader, Attestation, repository, tag ref, and github-hosted runner checks passed."
