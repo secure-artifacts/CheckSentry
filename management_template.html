@@ -20,18 +20,18 @@
   h1 { font-size: 22px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
   h1 a { font-size: 14px; text-decoration: none; color: #2c5282; border: 1px solid #2c5282; padding: 4px 12px; border-radius: 4px; }
   h1 a:hover { background: #ebf4ff; }
-  
+
   .tabs { display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
   .tab { padding: 8px 16px; cursor: pointer; border: 1px solid var(--border); background: #fff; border-radius: 6px; font-weight: 500; }
   .tab.active { background: #2c5282; color: #fff; border-color: #2c5282; }
-  
+
   .toolbar { display: flex; gap: 10px; margin-bottom: 16px; align-items: center; }
   .toolbar input[type="text"], .toolbar select { padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; }
   .toolbar button { padding: 6px 14px; border: none; border-radius: 4px; background: #2c5282; color: #fff; cursor: pointer; font-size: 13px; }
   .toolbar button:hover { opacity: 0.9; }
   .toolbar button.undo-btn { background: #111; }
   .toolbar button.undo-btn:disabled { background: #b7b7b7; cursor: not-allowed; opacity: 1; }
-  
+
   table { width: 100%; table-layout: fixed; border-collapse: collapse; background: #fff; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; font-size: 13.5px; }
   table th:nth-child(1), table td:nth-child(1) { width: 4%; }
   table th:nth-child(2), table td:nth-child(2) { width: 7%; }
@@ -62,12 +62,12 @@
   .rule-icon-cell, .rule-icon-cell + td { overflow: hidden; }
   .rule-icon { width: 32px; height: 32px; object-fit: contain; vertical-align: middle; border-radius: 5px; background: #fff; }
   .rule-icon-fallback { font-size: 20px; }
-  
+
   .btn-small { padding: 4px 8px; border: 1px solid #ccc; background: #fff; border-radius: 4px; cursor: pointer; font-size: 12px; }
   .btn-small:hover { background: #eee; }
   .btn-danger { color: var(--red); border-color: #f5c6cb; }
   .btn-danger:hover { background: var(--red-bg); }
-  
+
   .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 100; align-items: center; justify-content: center; }
   .modal { background: #fff; padding: 24px; border-radius: 8px; width: 500px; max-width: 90%; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
   .modal h2 { margin-top: 0; margin-bottom: 16px; font-size: 18px; }
@@ -78,7 +78,7 @@
   .modal-btns button { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; }
   .btn-cancel { background: #eee; color: #333; }
   .btn-save { background: #2c5282; color: #fff; }
-  
+
   .toast { position: fixed; bottom: 20px; right: 20px; background: #333; color: #fff; padding: 10px 18px; border-radius: 6px; font-size: 13px; opacity: 0; transition: opacity .2s; z-index: 1000; }
   .toast.show { opacity: 1; }
 </style>
@@ -88,13 +88,13 @@
     <span>清单维护</span>
     <a href="/">&#8592; 返回核对报告</a>
   </h1>
-  
+
   <div class="tabs">
     <div class="tab active" data-tab="白名单">白名单 (允许)</div>
     <div class="tab" data-tab="待定">待定 (待确认)</div>
     <div class="tab" data-tab="黑名单">黑名单 (禁止)</div>
   </div>
-  
+
   <div class="toolbar">
     <input type="text" id="searchInput" placeholder="搜索名称、发布者、插件ID...">
     <select id="typeFilter">
@@ -107,7 +107,7 @@
     <button id="undoButton" class="undo-btn" disabled>撤销上一步</button>
     <button id="addRuleButton">+ 新增规则</button>
   </div>
-  
+
   <table id="rulesTable">
     <thead>
       <tr id="tableHeader">
@@ -118,9 +118,9 @@
       <!-- 动态生成 -->
     </tbody>
   </table>
-  
+
   <div class="toast" id="toast"></div>
-  
+
   <!-- 新增/编辑弹窗 -->
   <div class="modal-overlay" id="modalOverlay">
     <div class="modal">
@@ -128,7 +128,7 @@
       <form id="ruleForm">
         <input type="hidden" id="formRuleId">
         <input type="hidden" id="formOriginalSheet">
-        
+
         <div class="form-group">
           <label>目标清单</label>
           <select id="formTargetSheet" required>
@@ -137,7 +137,7 @@
             <option value="黑名单">黑名单 (禁止)</option>
           </select>
         </div>
-        
+
         <div class="form-group">
           <label>类型</label>
           <select id="formType" required>
@@ -146,12 +146,12 @@
             <option value="Firefox插件">Firefox插件</option>
           </select>
         </div>
-        
+
         <div class="form-group" id="groupExtId" style="display:none;">
           <label>插件ID</label>
           <input type="text" id="formExtId" maxlength="256">
         </div>
-        
+
         <div class="form-group">
           <label>匹配方式</label>
           <select id="formMatchType" required>
@@ -162,17 +162,17 @@
             <option value="插件ID精确">插件ID精确</option>
           </select>
         </div>
-        
+
         <div class="form-group">
           <label>软件名关键词</label>
           <input type="text" id="formNamePattern" maxlength="512" required>
         </div>
-        
+
         <div class="form-group">
           <label>版本号 (留空表示不限制)</label>
           <input type="text" id="formVersion" maxlength="128">
         </div>
-        
+
         <div class="form-group">
           <label>发布者 (留空表示不限制)</label>
           <input type="text" id="formPublisher" maxlength="256">
@@ -182,12 +182,12 @@
           <label>分类</label>
           <input type="text" id="formCategory" maxlength="128">
         </div>
-        
+
         <div class="form-group">
           <label>备注</label>
           <input type="text" id="formNote" maxlength="2000">
         </div>
-        
+
         <div class="modal-btns">
           <button type="button" class="btn-cancel" id="cancelModalButton">取消</button>
           <button type="submit" class="btn-save">保存</button>
@@ -367,7 +367,7 @@ function renderTable() {
   const thead = document.getElementById('tableHeader');
   const table = document.getElementById('rulesTable');
   table.className = currentTab === '黑名单' ? 'black-tab' : 'standard-tab';
-  
+
   if (currentTab === '白名单' || currentTab === '待定') {
     thead.innerHTML = `
       <th class="rule-icon-cell">图标</th>${sortLabel('类型','类型')}${sortLabel('插件ID','插件ID')}${sortLabel('匹配方式','匹配方式')}${sortLabel('关键词','软件名关键词')}
@@ -379,7 +379,7 @@ function renderTable() {
       ${sortLabel('版本号','版本号')}${sortLabel('发布者','发布者')}${sortLabel('分类','分类')}${sortLabel('备注','禁止原因')}<th class="action-col">操作</th>
     `;
   }
-  
+
   filterTable();
 }
 
@@ -393,17 +393,17 @@ function filterTable() {
     const right = String(b[sortKey] == null ? '' : b[sortKey]).toLowerCase();
     return left.localeCompare(right, 'zh-CN', { numeric: true }) * sortDirection;
   });
-  
+
   tbody.innerHTML = '';
-  
+
   let count = 0;
   for (const rule of rules) {
     const type = rule['类型'] || '软件';
     if (typeFilter && type !== typeFilter) continue;
-    
+
     const searchStr = `${type} ${rule['插件ID']||''} ${rule['软件名关键词']||''} ${rule['发布者']||''} ${rule['备注']||''} ${rule['禁止原因']||''}`.toLowerCase();
     if (keyword && !searchStr.includes(keyword)) continue;
-    
+
     const tr = document.createElement('tr');
     tr.dataset.ruleId = rule.id;
     tr.dataset.ruleSheet = currentTab;
@@ -423,7 +423,7 @@ function filterTable() {
     const icon = iconData
       ? `<img class="rule-icon" src="${safeIconData}" alt="" loading="lazy"><span class="rule-icon-fallback" style="display:none;">${fallbackIcon}</span>`
       : `<span class="rule-icon-fallback">${fallbackIcon}</span>`;
-    
+
     let html = `
       <td class="rule-icon-cell">${icon}</td>
       <td>${safeType}</td>
@@ -433,7 +433,7 @@ function filterTable() {
       <td>${safeVersion}</td>
       <td>${safePublisher}</td>
     `;
-    
+
     if (currentTab === '白名单' || currentTab === '待定') {
       const statusColor = rule['状态'] === '待定' ? 'color:#2c5282;font-weight:bold;' : 'color:#2f855a;';
       html += `
@@ -451,7 +451,7 @@ function filterTable() {
         <button type="button" class="btn-small btn-danger" data-action="delete">删除</button>
       </td>
     `;
-    
+
     tr.innerHTML = html;
     tr.ruleData = rule;
     decorateEditableRow(tr, rule, currentTab);
@@ -466,7 +466,7 @@ function filterTable() {
     tbody.appendChild(tr);
     count++;
   }
-  
+
       if (count === 0) {
     const emptyColspan = (currentTab === '黑名单') ? 10 : 11;
     tbody.innerHTML = `<tr><td colspan="${emptyColspan}" style="text-align:center;color:#999;padding:20px;">没有找到匹配的规则</td></tr>`;
@@ -478,7 +478,7 @@ function updateFormFields() {
   const type = document.getElementById('formType').value;
   const isSoftware = type === '软件';
   document.getElementById('groupExtId').style.display = isSoftware ? 'none' : 'block';
-  
+
   const matchType = document.getElementById('formMatchType');
   if (isSoftware) {
     if (matchType.value === '插件ID精确') matchType.value = '精确';
@@ -489,17 +489,17 @@ function updateFormFields() {
   } else {
     Array.from(matchType.options).forEach(o => o.style.display = 'block');
   }
-  
+
 }
 
 function openModal(rule = null, actualSheet = null) {
   document.getElementById('modalTitle').textContent = rule ? '编辑规则' : '新增规则';
-  
+
   const targetSheet = actualSheet || currentTab;
-  
+
   document.getElementById('formRuleId').value = rule ? rule.id : '';
   document.getElementById('formOriginalSheet').value = rule ? targetSheet : '';
-  
+
   document.getElementById('formTargetSheet').value = targetSheet;
   document.getElementById('formType').value = rule ? (rule['类型'] || '软件') : '软件';
   document.getElementById('formExtId').value = rule ? (rule['插件ID'] || '') : '';
@@ -508,7 +508,7 @@ function openModal(rule = null, actualSheet = null) {
   document.getElementById('formVersion').value = rule ? (rule['版本号'] || '') : '';
   document.getElementById('formPublisher').value = rule ? (rule['发布者'] || '') : '';
   document.getElementById('formCategory').value = rule ? (rule['分类'] || '') : '';
-  
+
   if (rule && targetSheet === '白名单') {
     document.getElementById('formNote').value = rule['备注'] || '';
   } else if (rule && targetSheet === '黑名单') {
@@ -518,7 +518,7 @@ function openModal(rule = null, actualSheet = null) {
   } else {
     document.getElementById('formNote').value = '';
   }
-  
+
   updateFormFields();
   document.getElementById('modalOverlay').style.display = 'flex';
 }
@@ -549,7 +549,7 @@ async function undoLastChange() {
 
 async function deleteRule(id, sheet) {
   if (!confirm('确定要删除这条规则吗？')) return;
-  
+
   try {
     const res = await apiPost('/api/manage/delete', { sheet: sheet, id: id });
     const data = await res.json();
@@ -566,7 +566,7 @@ async function deleteRule(id, sheet) {
 
 async function saveRule(evt) {
   evt.preventDefault();
-  
+
   const payload = {
     id: document.getElementById('formRuleId').value,
     originalSheet: document.getElementById('formOriginalSheet').value,
@@ -580,10 +580,10 @@ async function saveRule(evt) {
     category: document.getElementById('formCategory').value,
     note: document.getElementById('formNote').value
   };
-  
+
   const btn = evt.submitter;
   if (btn) btn.disabled = true;
-  
+
   try {
     const res = await apiPost('/api/manage/save', payload);
     const data = await res.json();

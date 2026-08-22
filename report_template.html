@@ -136,7 +136,7 @@
 <body>
   <h1>软件清单核对报告</h1>
   __SUMMARY__
-  
+
   <div class="batch-actions" style="position: sticky; top: 0; z-index: 99; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
     <span style="color: #666; font-weight: bold;">已勾选 <span id="batchCountText" style="color: #2c5282;">0</span> 项：</span>
     <button type="button" class="btn-approve" data-batch-status="允许" id="btnBatchApprove">加入白名单</button>
@@ -227,7 +227,7 @@ async function submitRule(evt) {
 function updateBatchCount() {
   const count = document.querySelectorAll('input.row-chk:checked').length;
   document.getElementById('batchCountText').textContent = count;
-  
+
   // 更新各个区域的“全选本区”复选框状态
   document.querySelectorAll('input.section-chk').forEach(secChk => {
     const table = secChk.closest('div.section-container').querySelector('table');
@@ -320,11 +320,11 @@ async function submitBatch(status) {
     showToast('请先勾选要操作的项', true);
     return;
   }
-  
+
   if (!confirm(`确定要将选中的 ${checked.length} 项批量设为 [${status}] 吗？`)) {
     return;
   }
-  
+
   const payloadList = [];
   checked.forEach(chk => {
     const form = chk.closest('tr').querySelector('form');
@@ -344,13 +344,13 @@ async function submitBatch(status) {
       });
     }
   });
-  
+
   if (payloadList.length === 0) return;
-  
+
   const buttons = document.querySelectorAll('.batch-actions button');
   buttons.forEach(b => b.disabled = true);
   showToast('正在批量处理，请稍候...', false, true);
-  
+
   try {
     const res = await apiPost('/api/addBatch', payloadList);
     const data = await res.json();

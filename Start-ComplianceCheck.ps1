@@ -143,6 +143,161 @@ function Assert-WorkbookPathSchema {
     }
 }
 
+function Test-WorkbookXmlNamespace {
+    param([string]$Path)
+    $zip = $null
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($Path)
+        $worksheetEntries = @($zip.Entries | Where-Object { $_.FullName -match '^xl/worksheets/sheet\d+\.xml$' })
+        if ($worksheetEntries.Count -lt 1) { return $false }
+        $mainNamespace = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+        foreach ($entry in $worksheetEntries) {
+            $stream = $null
+            $reader = $null
+            try {
+                $stream = $entry.Open()
+                $reader = New-Object System.IO.StreamReader($stream)
+                $document = New-Object System.Xml.XmlDocument
+                $document.PreserveWhitespace = $false
+                $document.Load($reader)
+                $sheetDataNodes = @($document.SelectNodes("//*[local-name()='sheetData']"))
+                if ($sheetDataNodes.Count -ne 1) { return $false }
+                foreach ($node in $sheetDataNodes) {
+                    if ([string]$node.NamespaceURI -ne $mainNamespace) { return $false }
+                }
+                $invalidRows = @($document.SelectNodes("//*[local-name()='row' and namespace-uri()!='$mainNamespace']"))
+                $invalidCells = @($document.SelectNodes("//*[local-name()='c' and namespace-uri()!='$mainNamespace']"))
+                if ($invalidRows.Count -gt 0 -or $invalidCells.Count -gt 0) { return $false }
+            } catch {
+                return $false
+            } finally {
+                if ($null -ne $reader) { $reader.Dispose() }
+                elseif ($null -ne $stream) { $stream.Dispose() }
+            }
+        }
+        return $true
+    } catch {
+        return $false
+    } finally {
+        if ($null -ne $zip) { $zip.Dispose() }
+    }
+}
+
+function Normalize-WorkbookXmlNamespace {
+    param([string]$Path)
+    $mainNamespace = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+    $directory = [System.IO.Path]::GetDirectoryName($Path)
+    $temporaryPath = Join-Path $directory ('.' + [System.IO.Path]::GetFileName($Path) + '.' + [guid]::NewGuid().ToString('N') + '.normalized.xlsx')
+    $sourceZip = $null
+    $destinationZip = $null
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+        $sourceZip = [System.IO.Compression.ZipFile]::OpenRead($Path)
+        $destinationZip = [System.IO.Compression.ZipFile]::Open($temporaryPath, [System.IO.Compression.ZipArchiveMode]::Create)
+        foreach ($sourceEntry in $sourceZip.Entries) {
+            $destinationEntry = $destinationZip.CreateEntry($sourceEntry.FullName)
+            $destinationStream = $null
+            $sourceStream = $null
+            try {
+                $destinationStream = $destinationEntry.Open()
+                $sourceStream = $sourceEntry.Open()
+                if ($sourceEntry.FullName -match '^xl/worksheets/sheet\d+\.xml$') {
+                    $reader = $null
+                    try {
+                        $utf8NoBom = New-Object -TypeName System.Text.UTF8Encoding -ArgumentList $false
+                        $reader = New-Object -TypeName System.IO.StreamReader -ArgumentList @($sourceStream, $utf8NoBom, $true)
+                        $document = New-Object System.Xml.XmlDocument
+                        $document.PreserveWhitespace = $true
+                        $document.Load($reader)
+                        $root = $document.DocumentElement
+                        if ($null -eq $root -or $root.LocalName -ne 'worksheet') {
+                            throw "工作表 XML 根节点无效：$($sourceEntry.FullName)"
+                        }
+                        $sheetDataNodes = @($document.SelectNodes("//*[local-name()='sheetData']"))
+                        if ($sheetDataNodes.Count -gt 1) {
+                            for ($index = 1; $index -lt $sheetDataNodes.Count; $index++) {
+                                $node = $sheetDataNodes[$index]
+                                if ($null -ne $node.ParentNode) { $node.ParentNode.RemoveChild($node) | Out-Null }
+                            }
+                        }
+                        if ([string]$root.GetAttribute('xmlns') -ne $mainNamespace) {
+                            $root.SetAttribute('xmlns', $mainNamespace)
+                        }
+                        $unqualifiedElements = @($document.SelectNodes("//*[namespace-uri()='']"))
+                        foreach ($element in $unqualifiedElements) {
+                            if ($element -eq $root -or $null -eq $element.ParentNode) { continue }
+                            $replacement = $document.CreateElement($element.LocalName, $mainNamespace)
+                            foreach ($attribute in @($element.Attributes)) {
+                                if ([string]$attribute.NamespaceURI -eq 'http://www.w3.org/2000/xmlns/') { continue }
+                                if ([string]::IsNullOrWhiteSpace([string]$attribute.NamespaceURI)) {
+                                    $replacement.SetAttribute($attribute.Name, $attribute.Value)
+                                } else {
+                                    $replacement.SetAttribute($attribute.LocalName, $attribute.NamespaceURI, $attribute.Value)
+                                }
+                            }
+                            while ($element.HasChildNodes) {
+                                $replacement.AppendChild($element.FirstChild) | Out-Null
+                            }
+                            $element.ParentNode.ReplaceChild($replacement, $element) | Out-Null
+                        }
+                        $duplicateChildren = @{}
+                        foreach ($child in @($root.ChildNodes | Where-Object { $_.NodeType -eq [System.Xml.XmlNodeType]::Element })) {
+                            $key = [string]$child.LocalName
+                            if ($duplicateChildren.ContainsKey($key) -and $child.ChildNodes.Count -eq 0) {
+                                $child.ParentNode.RemoveChild($child) | Out-Null
+                            } else {
+                                $duplicateChildren[$key] = $child
+                            }
+                        }
+                        $settings = New-Object System.Xml.XmlWriterSettings
+                        $settings.Encoding = New-Object System.Text.UTF8Encoding($false)
+                        $settings.OmitXmlDeclaration = $false
+                        $settings.Indent = $false
+                        $writer = [System.Xml.XmlWriter]::Create($destinationStream, $settings)
+                        try { $document.Save($writer) } finally { $writer.Dispose() }
+                    } finally {
+                        if ($null -ne $reader) { $reader.Dispose() }
+                    }
+                } else {
+                    $sourceStream.CopyTo($destinationStream)
+                }
+            } finally {
+                if ($null -ne $sourceStream) { $sourceStream.Dispose() }
+                if ($null -ne $destinationStream) { $destinationStream.Dispose() }
+            }
+        }
+    } finally {
+        if ($null -ne $destinationZip) { $destinationZip.Dispose() }
+        if ($null -ne $sourceZip) { $sourceZip.Dispose() }
+    }
+    try {
+        Set-WorkbookFileFromTemp -NewPath $temporaryPath -DestinationPath $Path
+    } finally {
+        if (Test-Path -LiteralPath $temporaryPath -PathType Leaf) {
+            Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Repair-WorkbookFile {
+    param([string]$Path)
+    Normalize-WorkbookXmlNamespace -Path $Path
+    if (-not (Test-WorkbookXmlNamespace -Path $Path)) {
+        throw "清单 XML 命名空间修复后仍未通过标准检查：$Path"
+    }
+    Assert-WorkbookPathSchema -Path $Path
+}
+
+function Ensure-WorkbookCompatibility {
+    param([string]$Path)
+    if (-not (Test-WorkbookXmlNamespace -Path $Path)) {
+        Write-Host "检测到清单存在非标准 XLSX 工作表结构，正在安全重建：$Path" -ForegroundColor Yellow
+        Repair-WorkbookFile -Path $Path
+        Write-Host "清单已重建为兼容 Excel 和 LibreOffice 的标准 XLSX：$Path" -ForegroundColor Green
+    }
+}
+
 function Convert-WorksheetToRules {
     param($Worksheet, [string]$SheetName)
     $headers = Get-ExpectedHeaders -SheetName $SheetName
@@ -298,6 +453,12 @@ function Invoke-WorkbookTransaction {
         Assert-WorkbookPackageSchema -Package $package
         Close-ExcelPackage -ExcelPackage $package -ErrorAction Stop
         $package = $null
+        if (-not (Test-WorkbookXmlNamespace -Path $temporaryPath)) {
+            Normalize-WorkbookXmlNamespace -Path $temporaryPath
+        }
+        if (-not (Test-WorkbookXmlNamespace -Path $temporaryPath)) {
+            throw "事务保存后的清单仍未通过标准 XLSX 命名空间检查：$temporaryPath"
+        }
         Assert-WorkbookPathSchema -Path $temporaryPath
         if ((Get-FileFingerprint -Path $Path) -ne $fingerprintBefore) {
             throw '清单在操作期间被外部修改，已取消本次写入。请关闭 Excel 后重试。'
@@ -889,7 +1050,7 @@ function Build-ReportHtml {
         else { $body += "<p class='empty'>$(ConvertTo-HtmlEncodedText $section.Empty)</p>" }
         $body += '</div>'
     }
-    $greenRows = ($green | ForEach-Object { Get-RowHtml -Item $_ -NeedsAction $false }) -join "`n"
+    $greenRows = ($green | ForEach-Object { Get-RowHtml -Item $_ -NeedsAction $true }) -join "`n"
     $body += "<div class='section-container'><details class='green-section'><summary><h2 class='sec-green'>&#128994; 已匹配（点击展开，共 $($green.Count) 项）</h2><label class='section-select green-select'><input type='checkbox' class='section-chk'> 全选本区</label></summary>$tableHead$greenRows$tableTail</details></div>"
     $summary = "<div class='summary'><span>核对时间：$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')</span><span class='tag tag-red'>黑名单：$($red.Count)</span><span class='tag tag-yellow'>版本变化：$($yellow.Count)</span><span class='tag tag-pending'>待定：$($pending.Count)</span><span class='tag tag-green'>已匹配：$($green.Count)</span><span class='tag'>清单文件：$(ConvertTo-HtmlEncodedText $Path)</span><button type='button' id='openManagementButton' class='manage-button'>清单维护</button><button type='button' id='reloadButton'>重新扫描</button></div>"
     $template = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'report_template.html') -Raw -Encoding UTF8
@@ -1186,10 +1347,12 @@ try {
     if (-not (Test-Path -LiteralPath $parentDirectory -PathType Container)) { throw "清单所在目录不存在：$parentDirectory" }
     if (-not (Test-Path -LiteralPath $ListPath -PathType Leaf)) {
         if (-not (Test-Path -LiteralPath $templatePath -PathType Leaf)) { throw '找不到 list_template.xlsx。' }
+        Ensure-WorkbookCompatibility -Path $templatePath
         Assert-WorkbookPathSchema -Path $templatePath
         Copy-Item -LiteralPath $templatePath -Destination $ListPath -ErrorAction Stop
         Write-Host "已从空白模板创建清单：$ListPath" -ForegroundColor Yellow
     }
+    Ensure-WorkbookCompatibility -Path $ListPath
     Assert-WorkbookPathSchema -Path $ListPath
     Show-RuleConflictWarnings -Path $ListPath
     Start-ReportServer -RequestedPort $Port -Path $ListPath -IncludeSystem $IncludeSystemComponents.IsPresent
