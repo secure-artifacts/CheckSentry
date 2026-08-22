@@ -1,0 +1,210 @@
+name: Build, Attest and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    name: Validate and release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout exact tag
+        uses: actions/checkout@v4
+
+      - name: Validate tag and source allowlist
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_REF_NAME -notmatch '^v\d+\.\d+\.\d+$') {
+            throw "Release tag must use vMAJOR.MINOR.PATCH: $env:GITHUB_REF_NAME"
+          }
+
+          $requiredFiles = @(
+            'README.md',
+            'TESTING.md',
+            '运行核对工具.bat',
+            'Start-ComplianceCheck.ps1',
+            'Get-InstalledSoftware.ps1',
+            'Get-InstalledExtensions.ps1',
+            'report_template.html',
+            'management_template.html',
+            'list_template.xlsx'
+          )
+          foreach ($path in $requiredFiles) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Required release file is missing: $path"
+            }
+          }
+
+          $forbiddenFiles = @(
+            Get-ChildItem -LiteralPath . -Recurse -Force -File | Where-Object {
+              $_.Name -eq 'list.xlsx' -or
+              $_.Name -like '~$*.xlsx' -or
+              $_.Name -like '*.backup.xlsx' -or
+              $_.Name -like '*.tmp.xlsx' -or
+              $_.Name -eq '.DS_Store'
+            }
+          )
+          if ($forbiddenFiles.Count -gt 0) {
+            throw "Forbidden personal or temporary file found: $($forbiddenFiles.FullName -join ', ')"
+          }
+
+      - name: Validate PowerShell 5.1 syntax and UTF-8 BOM
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $scriptFiles = @(
+            'Start-ComplianceCheck.ps1',
+            'Get-InstalledSoftware.ps1',
+            'Get-InstalledExtensions.ps1'
+          )
+          foreach ($path in $scriptFiles) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path -LiteralPath $path),
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors.Count -gt 0) {
+              throw "$path failed Windows PowerShell 5.1 parsing: $($errors.Message -join '; ')"
+            }
+            $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $path))
+            if ($bytes.Length -lt 4 -or $bytes[0] -ne 0xEF -or $bytes[1] -ne 0xBB -or $bytes[2] -ne 0xBF) {
+              throw "$path is not UTF-8 BOM."
+            }
+            if ($bytes.Length -ge 6 -and $bytes[3] -eq 0xEF -and $bytes[4] -eq 0xBB -and $bytes[5] -eq 0xBF) {
+              throw "$path contains a duplicate UTF-8 BOM."
+            }
+          }
+
+      - name: Validate PowerShell 7 syntax
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($path in @('Start-ComplianceCheck.ps1', 'Get-InstalledSoftware.ps1', 'Get-InstalledExtensions.ps1')) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path -LiteralPath $path),
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors.Count -gt 0) {
+              throw "$path failed PowerShell 7 parsing: $($errors.Message -join '; ')"
+            }
+          }
+
+      - name: Validate Excel template
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module ImportExcel -RequiredVersion 7.8.10 -Scope CurrentUser -Force
+          Import-Module ImportExcel -RequiredVersion 7.8.10 -Force
+
+          $package = Open-ExcelPackage -Path './list_template.xlsx'
+          try {
+            $expectedSheets = @('说明', '待定', '白名单', '黑名单')
+            $actualSheets = @($package.Workbook.Worksheets | ForEach-Object { $_.Name })
+            if (($actualSheets -join '|') -ne ($expectedSheets -join '|')) {
+              throw "Unexpected worksheet structure: $($actualSheets -join ', ')"
+            }
+
+            $expectedHeaders = @{
+              '待定' = @('id', '类型', '插件ID', '匹配方式', '软件名关键词', '版本号', '发布者', '状态', '分类', '备注', '添加人', '添加时间')
+              '白名单' = @('id', '类型', '插件ID', '匹配方式', '软件名关键词', '版本号', '发布者', '状态', '分类', '备注', '添加人', '添加时间')
+              '黑名单' = @('id', '类型', '插件ID', '匹配方式', '软件名关键词', '版本号', '发布者', '分类', '禁止原因', '添加人', '添加时间')
+            }
+            foreach ($sheetName in $expectedHeaders.Keys) {
+              $worksheet = $package.Workbook.Worksheets[$sheetName]
+              $headers = $expectedHeaders[$sheetName]
+              for ($column = 1; $column -le $headers.Count; $column++) {
+                if ([string]$worksheet.Cells[1, $column].Text -ne $headers[$column - 1]) {
+                  throw "Unexpected header in $sheetName column $column."
+                }
+              }
+              if ($null -ne $worksheet.Dimension -and $worksheet.Dimension.End.Row -gt 1) {
+                throw "Release template rule sheet must be empty: $sheetName"
+              }
+            }
+          } finally {
+            if ($null -ne $package) { $package.Dispose() }
+          }
+
+      - name: Build final release assets once
+        id: package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $releaseFiles = @(
+            'README.md',
+            'TESTING.md',
+            '运行核对工具.bat',
+            'Start-ComplianceCheck.ps1',
+            'Get-InstalledSoftware.ps1',
+            'Get-InstalledExtensions.ps1',
+            'report_template.html',
+            'management_template.html',
+            'list_template.xlsx'
+          )
+          $stagingPath = Join-Path $PWD 'dist/CheckSentry'
+          New-Item -ItemType Directory -Path $stagingPath -Force | Out-Null
+          foreach ($path in $releaseFiles) {
+            Copy-Item -LiteralPath $path -Destination $stagingPath
+          }
+
+          $assetName = "CheckSentry-$env:GITHUB_REF_NAME.zip"
+          $assetPath = Join-Path $PWD "dist/$assetName"
+          Compress-Archive -LiteralPath $stagingPath -DestinationPath $assetPath -CompressionLevel Optimal
+
+          $hash = (Get-FileHash -LiteralPath $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $checksumName = "$assetName.sha256"
+          $checksumPath = Join-Path $PWD "dist/$checksumName"
+          [System.IO.File]::WriteAllText($checksumPath, "$hash  $assetName`n", (New-Object System.Text.UTF8Encoding($false)))
+
+          "asset_path=dist/$assetName" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "checksum_path=dist/$checksumName" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "sha256=$hash" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Verify final asset is stable before attestation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = (Get-FileHash -LiteralPath '${{ steps.package.outputs.asset_path }}' -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '${{ steps.package.outputs.sha256 }}') {
+            throw 'Release ZIP changed before attestation.'
+          }
+
+      - name: Attest exact final Release assets
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            ${{ steps.package.outputs.asset_path }}
+            ${{ steps.package.outputs.checksum_path }}
+
+      - name: Verify final asset is unchanged after attestation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = (Get-FileHash -LiteralPath '${{ steps.package.outputs.asset_path }}' -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '${{ steps.package.outputs.sha256 }}') {
+            throw 'Release ZIP changed after attestation; refusing upload.'
+          }
+
+      - name: Create GitHub Release from attested files
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ steps.package.outputs.asset_path }}
+            ${{ steps.package.outputs.checksum_path }}
+          fail_on_unmatched_files: true
+          generate_release_notes: true
