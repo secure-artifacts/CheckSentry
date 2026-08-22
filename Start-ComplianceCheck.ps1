@@ -84,7 +84,7 @@ function Assert-WorkbookPackageSchema {
             throw "工作表【$sheetName】使用范围异常大，已拒绝处理。"
         }
         for ($column = 1; $column -le $headers.Count; $column++) {
-            $actual = [string]$worksheet.Cells[1, $column].Text
+            $actual = [string]($worksheet.Cells[1, $column].Text)
             if ($actual -ne $headers[$column - 1]) {
                 throw "工作表【$sheetName】第 $column 列应为【$($headers[$column - 1])】，实际为【$actual】。"
             }
@@ -104,10 +104,10 @@ function Assert-WorkbookPackageSchema {
                 if ($row -ge 2) {
                     $rowHasValue = $false
                     for ($column = 1; $column -le $headers.Count; $column++) {
-                        if (-not [string]::IsNullOrWhiteSpace([string]$worksheet.Cells[$row, $column].Value)) { $rowHasValue = $true; break }
+                        if (-not [string]::IsNullOrWhiteSpace([string]($worksheet.Cells[$row, $column].Value))) { $rowHasValue = $true; break }
                     }
                     if ($rowHasValue) {
-                        $id = [string]$worksheet.Cells[$row, 1].Value
+                        $id = [string]($worksheet.Cells[$row, 1].Value)
                         if ($id -notmatch '^\d{1,10}$') { throw "工作表【$sheetName】第 $row 行规则 ID 无效。" }
                         if ($seenIds.ContainsKey($id)) { throw "工作表【$sheetName】存在重复规则 ID：$id。" }
                         $seenIds[$id] = $true
@@ -375,7 +375,7 @@ function Get-WorksheetRowIdentity {
     param($Worksheet, [int]$Row, [string]$SheetName)
     $headers = Get-ExpectedHeaders -SheetName $SheetName
     $map = @{}
-    for ($column = 1; $column -le $headers.Count; $column++) { $map[$headers[$column - 1]] = [string]$Worksheet.Cells[$Row, $column].Value }
+    for ($column = 1; $column -le $headers.Count; $column++) { $map[$headers[$column - 1]] = [string]($Worksheet.Cells[$Row, $column].Value) }
     $itemType = if ([string]::IsNullOrWhiteSpace($map['类型'])) { '软件' } else { $map['类型'] }
     return Get-RuleIdentity -ItemType $itemType -ExtensionId $map['插件ID'] -NamePattern $map['软件名关键词']
 }
@@ -387,7 +387,7 @@ function Remove-RuleByIdFromPackage {
     $worksheet = $Package.Workbook.Worksheets[$sheet]
     if ($null -eq $worksheet.Dimension) { throw "工作表【$sheet】中不存在规则 $RuleId。" }
     for ($row = 2; $row -le $worksheet.Dimension.End.Row; $row++) {
-        if ([string]$worksheet.Cells[$row, 1].Value -eq $RuleId) {
+        if ([string]($worksheet.Cells[$row, 1].Value) -eq $RuleId) {
             $worksheet.DeleteRow($row, 1)
             return
         }
@@ -428,10 +428,10 @@ function Add-RuleToPackage {
     if ($null -ne $worksheet.Dimension) {
         for ($row = 2; $row -le $worksheet.Dimension.End.Row; $row++) {
             $parsedId = [long]0
-            if ([long]::TryParse([string]$worksheet.Cells[$row, 1].Value, [ref]$parsedId) -and $parsedId -gt $maximumId) { $maximumId = $parsedId }
+            if ([long]::TryParse([string]($worksheet.Cells[$row, 1].Value), [ref]$parsedId) -and $parsedId -gt $maximumId) { $maximumId = $parsedId }
             $rowHasValue = $false
             for ($column = 1; $column -le $headers.Count; $column++) {
-                if (-not [string]::IsNullOrWhiteSpace([string]$worksheet.Cells[$row, $column].Value)) { $rowHasValue = $true; break }
+                if (-not [string]::IsNullOrWhiteSpace([string]($worksheet.Cells[$row, $column].Value))) { $rowHasValue = $true; break }
             }
             if ($rowHasValue) { $targetRow = $row + 1 }
         }
