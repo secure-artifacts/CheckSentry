@@ -16,6 +16,7 @@ $script:AllowedItemTypes = @('软件', 'Chromium插件', 'Firefox插件')
 $script:AllowedMatchTypes = @('插件ID精确', '精确', '包含', '通配符', '正则')
 $script:LastUndoSnapshot = $null
 $script:InventoryCache = $null
+$script:IconDataCache = @{}
 $script:MaxRequestChars = 1048576
 
 function Initialize-ImportExcel {
@@ -182,6 +183,29 @@ function Import-RuleSheet {
         }
     }
     throw "读取【$SheetName】失败。请确认 Excel 已关闭且文件未损坏。详细错误：$($lastError.Exception.Message)"
+}
+
+function Import-AllRuleSheets {
+    param([string]$Path)
+    $lastError = $null
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        $package = $null
+        try {
+            $package = Open-ExcelPackage -Path $Path -ErrorAction Stop
+            Assert-WorkbookPackageSchema -Package $package
+            $result = [ordered]@{}
+            foreach ($sheetName in $script:AllowedSheets) {
+                $result[$sheetName] = @(Convert-WorksheetToRules -Worksheet $package.Workbook.Worksheets[$sheetName] -SheetName $sheetName)
+            }
+            return [PSCustomObject]$result
+        } catch {
+            $lastError = $_
+            if ($attempt -lt 3) { Start-Sleep -Milliseconds 350 }
+        } finally {
+            if ($null -ne $package) { $package.Dispose() }
+        }
+    }
+    throw "读取规则清单失败。请确认 Excel 已关闭且文件未损坏。详细错误：$($lastError.Exception.Message)"
 }
 
 function Test-ListFileAvailable {
@@ -380,6 +404,72 @@ function Get-WorksheetRowIdentity {
     return Get-RuleIdentity -ItemType $itemType -ExtensionId $map['插件ID'] -NamePattern $map['软件名关键词']
 }
 
+function Remove-IdentitiesFromPackage {
+    param($Package, [hashtable]$IdentitySet)
+    foreach ($sheetName in $script:AllowedSheets) {
+        $worksheet = $Package.Workbook.Worksheets[$sheetName]
+        if ($null -eq $worksheet.Dimension) { continue }
+        for ($row = $worksheet.Dimension.End.Row; $row -ge 2; $row--) {
+            $identity = Get-WorksheetRowIdentity -Worksheet $worksheet -Row $row -SheetName $sheetName
+            if ($IdentitySet.ContainsKey($identity)) { $worksheet.DeleteRow($row, 1) }
+        }
+    }
+}
+
+function Get-PackageIdentitySet {
+    param($Package)
+    $identitySet = @{}
+    foreach ($sheetName in $script:AllowedSheets) {
+        $worksheet = $Package.Workbook.Worksheets[$sheetName]
+        if ($null -eq $worksheet.Dimension) { continue }
+        for ($row = 2; $row -le $worksheet.Dimension.End.Row; $row++) {
+            $identity = Get-WorksheetRowIdentity -Worksheet $worksheet -Row $row -SheetName $sheetName
+            if (-not [string]::IsNullOrWhiteSpace($identity)) { $identitySet[$identity] = $true }
+        }
+    }
+    return $identitySet
+}
+
+function Get-WorksheetAppendState {
+    param($Package, [string]$SheetName)
+    $sheet = Assert-AllowedSheet -SheetName $SheetName
+    $worksheet = $Package.Workbook.Worksheets[$sheet]
+    $headers = Get-ExpectedHeaders -SheetName $sheet
+    $maximumId = [long]0
+    $targetRow = 2
+    if ($null -ne $worksheet.Dimension) {
+        for ($row = 2; $row -le $worksheet.Dimension.End.Row; $row++) {
+            $parsedId = [long]0
+            if ([long]::TryParse([string]($worksheet.Cells[$row, 1].Value), [ref]$parsedId) -and $parsedId -gt $maximumId) { $maximumId = $parsedId }
+            $rowHasValue = $false
+            for ($column = 1; $column -le $headers.Count; $column++) {
+                if (-not [string]::IsNullOrWhiteSpace([string]($worksheet.Cells[$row, $column].Value))) { $rowHasValue = $true; break }
+            }
+            if ($rowHasValue) { $targetRow = $row + 1 }
+        }
+    }
+    return [PSCustomObject]@{ Sheet = $sheet; Worksheet = $worksheet; Headers = $headers; NextId = $maximumId + 1; NextRow = $targetRow }
+}
+
+function Add-RuleToPackageWithState {
+    param($State, $Rule)
+    if ($State.NextId -gt 9999999999) { throw "工作表【$($State.Sheet)】的规则 ID 已达到上限。" }
+    for ($column = 1; $column -le $State.Headers.Count; $column++) {
+        $header = $State.Headers[$column - 1]
+        if ($header -eq 'id') { $State.Worksheet.Cells[$State.NextRow, $column].Value = [long]$State.NextId }
+        else {
+            $property = $Rule.PSObject.Properties[$header]
+            $value = if ($null -ne $property -and $null -ne $property.Value) { [string]$property.Value } else { '' }
+            $State.Worksheet.Cells[$State.NextRow, $column].Value = $value
+            $State.Worksheet.Cells[$State.NextRow, $column].Style.Numberformat.Format = '@'
+        }
+    }
+    $assignedId = [long]$State.NextId
+    $State.NextId = [long]$State.NextId + 1
+    $State.NextRow = [int]$State.NextRow + 1
+    return $assignedId
+}
+
 function Remove-RuleByIdFromPackage {
     param($Package, [string]$SheetName, [string]$RuleId)
     $sheet = Assert-AllowedSheet -SheetName $SheetName
@@ -420,34 +510,8 @@ function Test-IdentityInSheet {
 
 function Add-RuleToPackage {
     param($Package, [string]$SheetName, $Rule)
-    $sheet = Assert-AllowedSheet -SheetName $SheetName
-    $worksheet = $Package.Workbook.Worksheets[$sheet]
-    $headers = Get-ExpectedHeaders -SheetName $sheet
-    $maximumId = [long]0
-    $targetRow = 2
-    if ($null -ne $worksheet.Dimension) {
-        for ($row = 2; $row -le $worksheet.Dimension.End.Row; $row++) {
-            $parsedId = [long]0
-            if ([long]::TryParse([string]($worksheet.Cells[$row, 1].Value), [ref]$parsedId) -and $parsedId -gt $maximumId) { $maximumId = $parsedId }
-            $rowHasValue = $false
-            for ($column = 1; $column -le $headers.Count; $column++) {
-                if (-not [string]::IsNullOrWhiteSpace([string]($worksheet.Cells[$row, $column].Value))) { $rowHasValue = $true; break }
-            }
-            if ($rowHasValue) { $targetRow = $row + 1 }
-        }
-    }
-    if ($maximumId -ge 9999999999) { throw "工作表【$sheet】的规则 ID 已达到上限。" }
-    for ($column = 1; $column -le $headers.Count; $column++) {
-        $header = $headers[$column - 1]
-        if ($header -eq 'id') { $worksheet.Cells[$targetRow, $column].Value = [long]($maximumId + 1) }
-        else {
-            $property = $Rule.PSObject.Properties[$header]
-            $value = if ($null -ne $property -and $null -ne $property.Value) { [string]$property.Value } else { '' }
-            $worksheet.Cells[$targetRow, $column].Value = $value
-            $worksheet.Cells[$targetRow, $column].Style.Numberformat.Format = '@'
-        }
-    }
-    return ($maximumId + 1)
+    $state = Get-WorksheetAppendState -Package $Package -SheetName $SheetName
+    return Add-RuleToPackageWithState -State $state -Rule $Rule
 }
 
 function Test-VersionMatch {
@@ -513,6 +577,7 @@ function New-ComplianceItem {
         插件ID = if ($isSoftware) { '' } else { [string]$Source.ExtensionId }
         Locations = if ($isSoftware) { $null } else { $Source.Locations }
         图标路径 = if ($isSoftware) { [string]$Source.图标路径 } else { [string]$Source.IconPath }
+        图标索引 = if ($isSoftware) { [int]$Source.图标索引 } else { 0 }
         MatchedSheet = $MatchedSheet
         MatchedRuleId = if ($null -ne $MatchedRule) { $MatchedRule.id } else { $null }
     }
@@ -565,14 +630,12 @@ function Add-NewPendingRules {
     $operation = {
         param($package)
         $added = 0
+        $existingIdentities = Get-PackageIdentitySet -Package $package
+        $pendingState = Get-WorksheetAppendState -Package $package -SheetName '待定'
         foreach ($item in $candidates) {
             $itemType = [string]$item.类型
             $identity = Get-RuleIdentity -ItemType $itemType -ExtensionId ([string]$item.插件ID) -NamePattern ([string]$item.名称)
-            $exists = $false
-            foreach ($sheetName in $script:AllowedSheets) {
-                if (Test-IdentityInSheet -Package $package -SheetName $sheetName -Identity $identity) { $exists = $true; break }
-            }
-            if ($exists) { continue }
+            if ($existingIdentities.ContainsKey($identity)) { continue }
             $ruleData = [PSCustomObject]@{
                 type = $itemType
                 extId = [string]$item.插件ID
@@ -584,7 +647,8 @@ function Add-NewPendingRules {
                 note = '扫描自动加入待定'
             }
             $rule = Convert-InputToRule -Data $ruleData -TargetSheet '待定'
-            $null = Add-RuleToPackage -Package $package -SheetName '待定' -Rule $rule
+            $null = Add-RuleToPackageWithState -State $pendingState -Rule $rule
+            $existingIdentities[$identity] = $true
             $added++
         }
         return $added
@@ -596,7 +660,7 @@ function Add-NewPendingRules {
 
 function Get-InventoryData {
     param([switch]$ForceRefresh, [switch]$IncludeSystem)
-    if (-not $ForceRefresh -and $null -ne $script:InventoryCache -and ((Get-Date) - $script:InventoryCache.CreatedAt).TotalSeconds -lt 30) {
+    if (-not $ForceRefresh -and $null -ne $script:InventoryCache) {
         return $script:InventoryCache
     }
     $script:InventoryCache = [PSCustomObject]@{
@@ -608,38 +672,98 @@ function Get-InventoryData {
     return $script:InventoryCache
 }
 
+function Initialize-NativeIconApi {
+    if ($null -ne ('CheckSentry.NativeIconMethods' -as [type])) { return }
+    $source = @'
+using System;
+using System.Runtime.InteropServices;
+
+namespace CheckSentry {
+    public static class NativeIconMethods {
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        public static extern uint ExtractIconEx(
+            string szFileName,
+            int nIconIndex,
+            out IntPtr phiconLarge,
+            out IntPtr phiconSmall,
+            uint nIcons);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool DestroyIcon(IntPtr hIcon);
+    }
+}
+'@
+    Add-Type -TypeDefinition $source -ErrorAction Stop
+}
+
 function Get-LocalIconDataUri {
-    param([string]$Path)
+    param(
+        [string]$Path,
+        [int]$IconIndex = 0
+    )
     if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return '' }
     try {
+        $fileItem = Get-Item -LiteralPath $Path -ErrorAction Stop
+        $cacheKey = '{0}|{1}|{2}|{3}' -f $fileItem.FullName.ToLowerInvariant(), $IconIndex, $fileItem.Length, $fileItem.LastWriteTimeUtc.Ticks
+        if ($script:IconDataCache.ContainsKey($cacheKey)) { return [string]$script:IconDataCache[$cacheKey] }
+        if ($script:IconDataCache.Count -gt 2048) { $script:IconDataCache.Clear() }
+
         $extension = [System.IO.Path]::GetExtension($Path).ToLowerInvariant()
         if ($extension -in @('.exe', '.dll')) {
             Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+            Initialize-NativeIconApi
+            $largeHandle = [IntPtr]::Zero
+            $smallHandle = [IntPtr]::Zero
             $icon = $null; $bitmap = $null; $stream = $null
             try {
-                $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($Path)
-                if ($null -eq $icon) { return '' }
+                $count = [CheckSentry.NativeIconMethods]::ExtractIconEx($Path, $IconIndex, [ref]$largeHandle, [ref]$smallHandle, 1)
+                $selectedHandle = if ($largeHandle -ne [IntPtr]::Zero) { $largeHandle } else { $smallHandle }
+                if ($count -gt 0 -and $selectedHandle -ne [IntPtr]::Zero) {
+                    $icon = [System.Drawing.Icon]::FromHandle($selectedHandle)
+                } else {
+                    $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($Path)
+                }
+                if ($null -eq $icon) { $script:IconDataCache[$cacheKey] = ''; return '' }
                 $bitmap = $icon.ToBitmap()
                 $stream = New-Object System.IO.MemoryStream
                 $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
-                return 'data:image/png;base64,' + [Convert]::ToBase64String($stream.ToArray())
+                $dataUri = 'data:image/png;base64,' + [Convert]::ToBase64String($stream.ToArray())
+                $script:IconDataCache[$cacheKey] = $dataUri
+                return $dataUri
             } finally {
                 if ($null -ne $stream) { $stream.Dispose() }
                 if ($null -ne $bitmap) { $bitmap.Dispose() }
                 if ($null -ne $icon) { $icon.Dispose() }
+                if ($largeHandle -ne [IntPtr]::Zero) { $null = [CheckSentry.NativeIconMethods]::DestroyIcon($largeHandle) }
+                if ($smallHandle -ne [IntPtr]::Zero -and $smallHandle -ne $largeHandle) { $null = [CheckSentry.NativeIconMethods]::DestroyIcon($smallHandle) }
             }
         }
-        if ($extension -notin @('.png', '.jpg', '.jpeg', '.gif', '.ico')) { return '' }
-        $bytes = [System.IO.File]::ReadAllBytes($Path)
-        if ($bytes.Length -eq 0 -or $bytes.Length -gt 524288) { return '' }
+        $bytes = $null
+        if ($extension -notin @('.png', '.jpg', '.jpeg', '.gif', '.ico')) {
+            if ([string]::IsNullOrWhiteSpace($extension)) {
+                $bytes = [System.IO.File]::ReadAllBytes($Path)
+                if ($bytes.Length -ge 4 -and $bytes[0] -eq 0 -and $bytes[1] -eq 0 -and $bytes[2] -eq 1 -and $bytes[3] -eq 0) {
+                    $extension = '.ico'
+                }
+            }
+            if ($extension -notin @('.png', '.jpg', '.jpeg', '.gif', '.ico')) { $script:IconDataCache[$cacheKey] = ''; return '' }
+        }
+        if ($null -eq $bytes) { $bytes = [System.IO.File]::ReadAllBytes($Path) }
+        if ($bytes.Length -eq 0 -or $bytes.Length -gt 524288) { $script:IconDataCache[$cacheKey] = ''; return '' }
         $mime = ''
         if ($extension -eq '.png' -and $bytes.Length -ge 8 -and $bytes[0] -eq 0x89 -and $bytes[1] -eq 0x50 -and $bytes[2] -eq 0x4E -and $bytes[3] -eq 0x47) { $mime = 'image/png' }
         elseif ($extension -in @('.jpg', '.jpeg') -and $bytes.Length -ge 3 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xD8 -and $bytes[2] -eq 0xFF) { $mime = 'image/jpeg' }
         elseif ($extension -eq '.gif' -and $bytes.Length -ge 6 -and [Text.Encoding]::ASCII.GetString($bytes, 0, 6) -match '^GIF8[79]a$') { $mime = 'image/gif' }
         elseif ($extension -eq '.ico' -and $bytes.Length -ge 4 -and $bytes[0] -eq 0 -and $bytes[1] -eq 0 -and $bytes[2] -eq 1 -and $bytes[3] -eq 0) { $mime = 'image/x-icon' }
-        if ([string]::IsNullOrWhiteSpace($mime)) { return '' }
-        return 'data:' + $mime + ';base64,' + [Convert]::ToBase64String($bytes)
-    } catch { return '' }
+        if ([string]::IsNullOrWhiteSpace($mime)) { $script:IconDataCache[$cacheKey] = ''; return '' }
+        $dataUri = 'data:' + $mime + ';base64,' + [Convert]::ToBase64String($bytes)
+        $script:IconDataCache[$cacheKey] = $dataUri
+        return $dataUri
+    } catch {
+        Write-Verbose "图标提取失败：$Path，索引 $IconIndex。$($_.Exception.Message)"
+        return ''
+    }
 }
 
 function Get-RuleIconDataUri {
@@ -647,11 +771,12 @@ function Get-RuleIconDataUri {
     $inventory = Get-InventoryData -IncludeSystem:$IncludeSystem
     $itemType = if ([string]::IsNullOrWhiteSpace([string]$Rule.'类型')) { '软件' } else { [string]$Rule.'类型' }
     $iconPath = ''
+    $iconIndex = 0
     if ($itemType -eq '软件') {
         $software = $inventory.Software | Where-Object {
             Test-NameMatch -InstalledName ([string]$_.名称) -Rule $Rule
         } | Select-Object -First 1
-        if ($null -ne $software) { $iconPath = [string]$software.图标路径 }
+        if ($null -ne $software) { $iconPath = [string]$software.图标路径; $iconIndex = [int]$software.图标索引 }
     } else {
         $extensions = if ($itemType -eq 'Firefox插件') { $inventory.Firefox } else { $inventory.Chromium }
         $extension = $extensions | Where-Object {
@@ -659,7 +784,7 @@ function Get-RuleIconDataUri {
         } | Select-Object -First 1
         if ($null -ne $extension) { $iconPath = [string]$extension.IconPath }
     }
-    return Get-LocalIconDataUri -Path $iconPath
+    return Get-LocalIconDataUri -Path $iconPath -IconIndex $iconIndex
 }
 
 function Convert-RulesForWeb {
@@ -687,7 +812,7 @@ function Get-RowHtml {
     $reason = ConvertTo-HtmlEncodedText $Item.原因
     $status = ConvertTo-HtmlEncodedText $Item.状态
     $typeIcon = if ($Item.类型 -eq '软件') { '&#128187;' } elseif ($Item.类型 -eq 'Chromium插件') { '&#127760;' } else { '&#129418;' }
-    $iconSource = Get-LocalIconDataUri -Path ([string]$Item.图标路径)
+    $iconSource = Get-LocalIconDataUri -Path ([string]$Item.图标路径) -IconIndex ([int]$Item.图标索引)
     $iconHtml = if ($iconSource) { "<img class='item-icon' src='$(ConvertTo-HtmlEncodedText $iconSource)' alt='' loading='lazy'><span class='type-fallback hidden'>$typeIcon</span>" } else { "<span class='type-fallback'>$typeIcon</span>" }
 
     $locationText = ''
@@ -887,8 +1012,9 @@ function Write-RuleChange {
 function Show-RuleConflictWarnings {
     param([string]$Path)
     $entries = @()
+    $allRules = Import-AllRuleSheets -Path $Path
     foreach ($sheetName in $script:AllowedSheets) {
-        foreach ($rule in @(Import-RuleSheet -Path $Path -SheetName $sheetName)) {
+        foreach ($rule in @($allRules.$sheetName)) {
             $itemType = if ([string]::IsNullOrWhiteSpace([string]$rule.'类型')) { '软件' } else { [string]$rule.'类型' }
             $entries += [PSCustomObject]@{ Identity = Get-RuleIdentity -ItemType $itemType -ExtensionId ([string]$rule.'插件ID') -NamePattern ([string]$rule.'软件名关键词'); Sheet = $sheetName }
         }
@@ -941,15 +1067,18 @@ function Start-ReportServer {
                     $template = $template.Replace('__CSRF_TOKEN__', (ConvertTo-HtmlEncodedText $csrfToken)).Replace('__CSP_NONCE__', (ConvertTo-HtmlEncodedText $nonce))
                     Write-HtmlResponse -Response $response -Html $template -StatusCode 200 -Nonce $nonce
                 } elseif ($request.HttpMethod -eq 'GET' -and $route -eq '/api/rules') {
-                    $black = @(Convert-RulesForWeb -Rules @(Import-RuleSheet -Path $Path -SheetName '黑名单') -IncludeSystem $IncludeSystem)
-                    $white = @(Convert-RulesForWeb -Rules @(Import-RuleSheet -Path $Path -SheetName '白名单') -IncludeSystem $IncludeSystem)
-                    $pending = @(Convert-RulesForWeb -Rules @(Import-RuleSheet -Path $Path -SheetName '待定') -IncludeSystem $IncludeSystem)
+                    $allRules = Import-AllRuleSheets -Path $Path
+                    $black = @(Convert-RulesForWeb -Rules @($allRules.'黑名单') -IncludeSystem $IncludeSystem)
+                    $white = @(Convert-RulesForWeb -Rules @($allRules.'白名单') -IncludeSystem $IncludeSystem)
+                    $pending = @(Convert-RulesForWeb -Rules @($allRules.'待定') -IncludeSystem $IncludeSystem)
                     Write-JsonResponse -Response $response -Object @{ ok = $true; blackRules = $black; whiteRules = $white; pendingRules = $pending; canUndo = ($null -ne $script:LastUndoSnapshot) } -StatusCode 200 -Nonce $nonce
                 } elseif ($request.HttpMethod -eq 'GET' -and $route -eq '/') {
-                    $inventory = Get-InventoryData -ForceRefresh -IncludeSystem:$IncludeSystem
-                    $black = @(Import-RuleSheet -Path $Path -SheetName '黑名单')
-                    $white = @(Import-RuleSheet -Path $Path -SheetName '白名单')
-                    $pending = @(Import-RuleSheet -Path $Path -SheetName '待定')
+                    $forceRefresh = $request.QueryString['refresh'] -eq '1'
+                    $inventory = Get-InventoryData -ForceRefresh:$forceRefresh -IncludeSystem:$IncludeSystem
+                    $allRules = Import-AllRuleSheets -Path $Path
+                    $black = @($allRules.'黑名单')
+                    $white = @($allRules.'白名单')
+                    $pending = @($allRules.'待定')
                     $results = @()
                     $results += Get-ComplianceResult -Installed $inventory.Software -BlackRules $black -WhiteRules $white -PendingRules $pending -ItemType '软件'
                     $results += Get-ComplianceResult -Installed $inventory.Chromium -BlackRules $black -WhiteRules $white -PendingRules $pending -ItemType 'Chromium插件'
@@ -998,9 +1127,13 @@ function Start-ReportServer {
                         }
                         $operation = {
                             param($package)
+                            Remove-IdentitiesFromPackage -Package $package -IdentitySet $seenIdentities
+                            $appendStates = @{}
                             foreach ($entry in $validated) {
-                                Remove-IdentityFromPackage -Package $package -Identity $entry.Identity
-                                $null = Add-RuleToPackage -Package $package -SheetName $entry.Target -Rule $entry.Rule
+                                if (-not $appendStates.ContainsKey($entry.Target)) {
+                                    $appendStates[$entry.Target] = Get-WorksheetAppendState -Package $package -SheetName $entry.Target
+                                }
+                                $null = Add-RuleToPackageWithState -State $appendStates[$entry.Target] -Rule $entry.Rule
                             }
                             return $validated.Count
                         }

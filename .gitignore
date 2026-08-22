@@ -1,24 +1,12 @@
-# 用户数据文件
+# User data
 list.xlsx
 list.xlsx.*
-~$*.xlsx
 
-# 历史备份文件
+# Backups
 list_template.xlsx.before_*
 *.backup_*
 *.before_pending_*
-*.backup.xlsx
 
-# 临时文件
+# Temporary files
 *.tmp.xlsx
 *.extracted.js
-*.log
-*.html.bak
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# 本地测试与打包产物
-test-results/
-release/
-*.zip
