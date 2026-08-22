@@ -31,23 +31,38 @@
   .toolbar button:hover { opacity: 0.9; }
   .toolbar button.undo-btn { background: #111; }
   .toolbar button.undo-btn:disabled { background: #b7b7b7; cursor: not-allowed; opacity: 1; }
+  .toolbar button.takeover-btn { background: #7b341e; }
+  .toolbar button.takeover-btn:disabled { background: #b7b7b7; cursor: not-allowed; }
+  .toolbar button.password-btn { background: #4a5568; }
+  .toolbar button.select-btn { background: #111; }
+  .toolbar button.invert-btn { background: #4a5568; }
+  .toolbar button.batch-white-btn { background: #2f855a; }
+  .toolbar button.batch-pending-btn { background: #b7791f; }
+  .toolbar button.batch-black-btn { background: #c0392b; }
+  .toolbar button:disabled { background: #b7b7b7; cursor: not-allowed; opacity: 1; }
+  .selected-count { color: #555; font-size: 12px; white-space: nowrap; }
+  .select-cell { width: 42px; text-align: center; }
+  .row-select { width: 15px; height: 15px; vertical-align: middle; }
+  .readonly-meta { color: #666; background: #fafafa; }
+  .modal-help { color: #666; font-size: 12px; line-height: 1.5; margin: -6px 0 12px; }
 
   table { width: 100%; table-layout: fixed; border-collapse: collapse; background: #fff; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; font-size: 13.5px; }
-  table th:nth-child(1), table td:nth-child(1) { width: 4%; }
-  table th:nth-child(2), table td:nth-child(2) { width: 7%; }
-  table th:nth-child(3), table td:nth-child(3) { width: 10%; }
+    table th:nth-child(1), table td:nth-child(1) { width: 4%; }
+  table th:nth-child(2), table td:nth-child(2) { width: 4%; }
+  table th:nth-child(3), table td:nth-child(3) { width: 6%; }
   table th:nth-child(4), table td:nth-child(4) { width: 8%; }
-  table th:nth-child(5), table td:nth-child(5) { width: 18%; }
-  table th:nth-child(6), table td:nth-child(6) { width: 7%; }
-  table th:nth-child(7), table td:nth-child(7) { width: 11%; }
-  table th:nth-child(8), table td:nth-child(8) { width: 6%; }
-  table th:nth-child(9), table td:nth-child(9) { width: 9%; }
-  table th:nth-child(10), table td:nth-child(10) { width: 13%; }
+  table th:nth-child(5), table td:nth-child(5) { width: 7%; }
+  table th:nth-child(6), table td:nth-child(6) { width: 15%; }
+  table th:nth-child(7), table td:nth-child(7) { width: 6%; }
+  table th:nth-child(8), table td:nth-child(8) { width: 8%; }
+  table th:nth-child(9), table td:nth-child(9) { width: 8%; }
+  table th:nth-child(10), table td:nth-child(10) { width: 14%; }
   table th:nth-child(11), table td:nth-child(11) { width: 7%; }
-  #rulesTable.black-tab th:nth-child(5), #rulesTable.black-tab td:nth-child(5) { width: 23%; }
-  #rulesTable.black-tab th:nth-child(8), #rulesTable.black-tab td:nth-child(8) { width: 10%; }
-  #rulesTable.black-tab th:nth-child(9), #rulesTable.black-tab td:nth-child(9) { width: 16%; }
-  #rulesTable.black-tab th:nth-child(10), #rulesTable.black-tab td:nth-child(10) { width: 7%; }
+  table th:nth-child(12), table td:nth-child(12) { width: 8%; }
+  table th:nth-child(13), table td:nth-child(13) { width: 9%; }
+  .rule-icon-inline { width: 24px; height: 24px; object-fit: contain; vertical-align: middle; margin-right: 6px; border-radius: 4px; background: #fff; }
+  .rule-icon-fallback-inline { display: inline-block; width: 24px; margin-right: 6px; text-align: center; font-size: 17px; vertical-align: middle; }
+
   th.sortable { cursor: pointer; user-select: none; position: relative; }
   th.sortable:hover { background: #eaf2fb; }
   th.sortable::after { content: ' ↕'; color: #9aa6b2; font-size: 11px; }
@@ -104,24 +119,81 @@
       <option value="Firefox插件">Firefox插件</option>
     </select>
     <div style="flex: 1;"></div>
-    <button id="undoButton" class="undo-btn" disabled>撤销上一步</button>
+        <button id="undoButton" class="undo-btn" disabled>撤销上一步</button>
+    <button id="selectAllButton" class="select-btn">全选当前清单</button>
+    <button id="invertSelectionButton" class="invert-btn">反选当前清单</button>
+    <button id="batchWhiteButton" class="batch-white-btn" disabled>加入白名单</button>
+    <button id="batchPendingButton" class="batch-pending-btn" disabled>标记待定</button>
+    <button id="batchBlackButton" class="batch-black-btn" disabled>加入黑名单</button>
+    <span id="selectedCount" class="selected-count">已选 0 条</span>
+    <button id="takeoverButton" class="takeover-btn">接管记录</button>
+    <button id="passwordButton" class="password-btn">设置接管密码</button>
     <button id="addRuleButton">+ 新增规则</button>
+
   </div>
 
   <table id="rulesTable">
     <thead>
-      <tr id="tableHeader">
+            <tr id="tableHeader">
         <!-- 动态生成 -->
       </tr>
+
     </thead>
     <tbody id="tableBody">
       <!-- 动态生成 -->
     </tbody>
   </table>
 
-  <div class="toast" id="toast"></div>
+    <div class="toast" id="toast"></div>
+
+  <div class="modal-overlay" id="takeoverOverlay">
+    <div class="modal">
+      <h2>接管记录</h2>
+      <p class="modal-help">验证成功后，本次 CheckSentry 运行期间会解锁所有清单的“添加人”和“添加时间”编辑。关闭 CheckSentry 后自动恢复只读。</p>
+      <form id="takeoverForm">
+        <div class="form-group">
+          <label>使用密码</label>
+          <input type="password" id="takeoverPassword" maxlength="256" autocomplete="current-password" required>
+        </div>
+        <div class="modal-btns">
+          <button type="button" class="btn-cancel" id="cancelTakeoverButton">取消</button>
+          <button type="submit" class="btn-save">解锁编辑</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="passwordOverlay">
+    <div class="modal">
+      <h2>设置接管密码</h2>
+      <p class="modal-help">首次设置时，“当前超级密码”填写超级密码；之后修改普通密码必须验证当前超级密码。新超级密码可留空，表示保持不变。</p>
+      <form id="passwordForm">
+        <div class="form-group">
+          <label>当前超级密码（首次设置也填写这里）</label>
+          <input type="password" id="passwordCurrentSuper" maxlength="256" autocomplete="current-password" required>
+        </div>
+        <div class="form-group">
+          <label>新超级密码（可留空）</label>
+          <input type="password" id="passwordNewSuper" maxlength="256" autocomplete="new-password">
+        </div>
+        <div class="form-group">
+          <label>新的使用密码</label>
+          <input type="password" id="passwordUsage" maxlength="256" autocomplete="new-password" required>
+        </div>
+        <div class="form-group">
+          <label>确认新的使用密码</label>
+          <input type="password" id="passwordUsageConfirm" maxlength="256" autocomplete="new-password" required>
+        </div>
+        <div class="modal-btns">
+          <button type="button" class="btn-cancel" id="cancelPasswordButton">取消</button>
+          <button type="submit" class="btn-save">保存密码</button>
+        </div>
+      </form>
+    </div>
+  </div>
 
   <!-- 新增/编辑弹窗 -->
+
   <div class="modal-overlay" id="modalOverlay">
     <div class="modal">
       <h2 id="modalTitle">新增规则</h2>
@@ -179,12 +251,7 @@
         </div>
 
         <div class="form-group">
-          <label>分类</label>
-          <input type="text" id="formCategory" maxlength="128">
-        </div>
-
-        <div class="form-group">
-          <label>备注</label>
+          <label>备注/原因</label>
           <input type="text" id="formNote" maxlength="2000">
         </div>
 
@@ -202,6 +269,8 @@ let currentTab = '白名单';
 let rulesData = { '白名单': [], '黑名单': [], '待定': [] };
 let sortKey = '';
 let sortDirection = 1;
+let takeoverUnlocked = false;
+let selectedRuleKeys = {};
 
 async function apiPost(url, payload) {
   return fetch(url, {
@@ -232,7 +301,8 @@ function sortTable(key) {
 }
 
 function inlineDisplayValue(rule, key) {
-  if (key === '备注' && currentTab === '黑名单') return rule['禁止原因'] || '';
+  if (key === '备注/原因') return rule['备注/原因'] || rule['备注'] || rule['禁止原因'] || '';
+  if (key === '状态/分类') return rule['状态/分类'] || (currentTab === '黑名单' ? '命中黑名单' : (currentTab === '待定' ? '待定' : '已匹配'));
   return rule[key] == null ? '' : String(rule[key]);
 }
 
@@ -246,18 +316,31 @@ function inlineSavePayload(rule, sheet, key, value) {
     matchType: rule['匹配方式'] || '精确',
     namePattern: rule['软件名关键词'] || '',
     version: rule['版本号'] || '',
-    publisher: rule['发布者'] || '',
-    category: rule['分类'] || '',
-    note: currentTab === '黑名单' ? (rule['禁止原因'] || '') : (rule['备注'] || '')
+            publisher: rule['发布者'] || '',
+    note: rule['备注/原因'] || rule['备注'] || rule['禁止原因'] || '',
+    addedBy: rule['添加人'] || '',
+    addedTime: rule['添加时间'] || '',
+    metadataEdit: false
   };
+
   if (key === '插件ID') payload.extId = value;
   if (key === '匹配方式') payload.matchType = value;
   if (key === '软件名关键词') payload.namePattern = value;
   if (key === '版本号') payload.version = value;
-  if (key === '发布者') payload.publisher = value;
-  if (key === '分类') payload.category = value;
-  if (key === '备注') payload.note = value;
+      if (key === '发布者') payload.publisher = value;
+  if (key === '备注/原因') payload.note = value;
+  if (key === '添加人') {
+    payload.addedBy = value;
+    payload.addedTime = '';
+    payload.metadataEdit = true;
+  }
+  if (key === '添加时间') {
+    payload.addedTime = value;
+    payload.metadataEdit = true;
+  }
+
   return payload;
+
 }
 
 async function saveInlineCell(cell, rule, sheet, key, oldValue) {
@@ -267,15 +350,24 @@ async function saveInlineCell(cell, rule, sheet, key, oldValue) {
     cell.textContent = oldValue || '-';
     return;
   }
-  if (!newValue && key === '软件名关键词') {
+    if (!newValue && (key === '软件名关键词' || key === '添加人')) {
     cell.textContent = oldValue || '-';
-    showToast('关键词不能为空', true);
+    showToast(key === '添加人' ? '添加人不能为空' : '关键词不能为空', true);
     return;
   }
+  const isMetadataKey = key === '添加人' || key === '添加时间';
+  if (isMetadataKey && !takeoverUnlocked) {
+    cell.textContent = oldValue || '-';
+    showToast('请先点击“接管记录”并输入使用密码', true);
+    return;
+  }
+
   cell.classList.add('inline-saving');
   cell.contentEditable = 'false';
   try {
-    const res = await apiPost('/api/manage/save', inlineSavePayload(rule, sheet, key, newValue));
+        const endpoint = isMetadataKey ? '/api/manage/saveMetadata' : '/api/manage/save';
+    const res = await apiPost(endpoint, inlineSavePayload(rule, sheet, key, newValue));
+
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || '保存失败');
     showToast('已保存', false);
@@ -284,21 +376,26 @@ async function saveInlineCell(cell, rule, sheet, key, oldValue) {
     cell.textContent = oldValue || '-';
     showToast('保存失败: ' + e.message, true);
   } finally {
-    cell.classList.remove('inline-saving');
-    cell.contentEditable = 'true';
+        cell.classList.remove('inline-saving');
+    cell.contentEditable = isMetadataKey ? String(takeoverUnlocked) : 'true';
+
   }
 }
 
 function decorateEditableRow(tr, rule, sheet) {
-  const editable = [
-    { index: 2, key: '插件ID' },
-    { index: 3, key: '匹配方式' },
-    { index: 4, key: '软件名关键词' },
-    { index: 5, key: '版本号' },
-    { index: 6, key: '发布者' },
-    { index: sheet === '黑名单' ? 7 : 8, key: '分类' },
-    { index: sheet === '黑名单' ? 8 : 9, key: '备注' }
+    const editable = [
+    { index: 4, key: '插件ID' },
+    { index: 5, key: '匹配方式' },
+    { index: 6, key: '软件名关键词' },
+    { index: 7, key: '版本号' },
+    { index: 8, key: '发布者' },
+    { index: 10, key: '备注/原因' }
   ];
+  if (takeoverUnlocked) {
+    editable.push({ index: 11, key: '添加人' });
+    editable.push({ index: 12, key: '添加时间' });
+  }
+
   editable.forEach(function(item) {
     const cell = tr.children[item.index];
     if (!cell) return;
@@ -341,11 +438,13 @@ async function loadData() {
   try {
     const res = await fetch('/api/rules');
     const data = await res.json();
-    if (data.ok) {
+        if (data.ok) {
       rulesData['白名单'] = data.whiteRules || [];
       rulesData['待定'] = data.pendingRules || [];
       rulesData['黑名单'] = data.blackRules || [];
+      takeoverUnlocked = data.takeoverUnlocked === true;
       setUndoState(data.canUndo === true);
+      updateTakeoverButton();
       renderTable();
     } else {
       showToast('加载数据失败: ' + data.error, true);
@@ -357,6 +456,8 @@ async function loadData() {
 
 function switchTab(tabName) {
   currentTab = tabName;
+  selectedRuleKeys = {};
+
   document.querySelectorAll('.tab').forEach(t => {
     t.classList.toggle('active', t.textContent.includes(tabName));
   });
@@ -366,24 +467,18 @@ function switchTab(tabName) {
 function renderTable() {
   const thead = document.getElementById('tableHeader');
   const table = document.getElementById('rulesTable');
-  table.className = currentTab === '黑名单' ? 'black-tab' : 'standard-tab';
+  table.className = 'standard-tab';
+  thead.innerHTML = `
+    <th class="select-cell">选择</th><th class="rule-icon-cell">图标</th>${sortLabel('id','id')}${sortLabel('类型','类型')}${sortLabel('插件ID','插件ID')}${sortLabel('匹配方式','匹配方式')}${sortLabel('软件名关键词','软件名关键词')}
+    ${sortLabel('版本号','版本号')}${sortLabel('发布者','发布者')}${sortLabel('状态/分类','状态/分类')}${sortLabel('备注/原因','备注/原因')}${sortLabel('添加人','添加人')}${sortLabel('添加时间','添加时间')}<th class="action-col">操作</th>
+  `;
 
-  if (currentTab === '白名单' || currentTab === '待定') {
-    thead.innerHTML = `
-      <th class="rule-icon-cell">图标</th>${sortLabel('类型','类型')}${sortLabel('插件ID','插件ID')}${sortLabel('匹配方式','匹配方式')}${sortLabel('关键词','软件名关键词')}
-      ${sortLabel('版本号','版本号')}${sortLabel('发布者','发布者')}${sortLabel('状态','状态')}${sortLabel('分类','分类')}${sortLabel('备注','备注')}<th class="action-col">操作</th>
-    `;
-  } else {
-    thead.innerHTML = `
-      <th class="rule-icon-cell">图标</th>${sortLabel('类型','类型')}${sortLabel('插件ID','插件ID')}${sortLabel('匹配方式','匹配方式')}${sortLabel('关键词','软件名关键词')}
-      ${sortLabel('版本号','版本号')}${sortLabel('发布者','发布者')}${sortLabel('分类','分类')}${sortLabel('备注','禁止原因')}<th class="action-col">操作</th>
-    `;
-  }
-
-  filterTable();
+    filterTable();
+  updateTakeoverButton();
 }
 
 function filterTable() {
+
   const keyword = document.getElementById('searchInput').value.toLowerCase();
   const typeFilter = document.getElementById('typeFilter').value;
   const tbody = document.getElementById('tableBody');
@@ -401,7 +496,7 @@ function filterTable() {
     const type = rule['类型'] || '软件';
     if (typeFilter && type !== typeFilter) continue;
 
-    const searchStr = `${type} ${rule['插件ID']||''} ${rule['软件名关键词']||''} ${rule['发布者']||''} ${rule['备注']||''} ${rule['禁止原因']||''}`.toLowerCase();
+    const searchStr = `${type} ${rule['插件ID']||''} ${rule['软件名关键词']||''} ${rule['发布者']||''} ${inlineDisplayValue(rule, '状态/分类')} ${inlineDisplayValue(rule, '备注/原因')} ${rule['添加人']||''} ${rule['添加时间']||''}`.toLowerCase();
     if (keyword && !searchStr.includes(keyword)) continue;
 
     const tr = document.createElement('tr');
@@ -409,6 +504,7 @@ function filterTable() {
     tr.dataset.ruleSheet = currentTab;
     const fallbackIcon = type === '软件' ? '&#128187;' : (type === 'Chromium插件' ? '&#127760;' : '&#129418;');
     const iconData = rule['图标数据'] || '';
+        const safeId = escapeHtml(rule.id || '-');
     const safeType = escapeHtml(type);
     const safeIconData = escapeHtml(iconData);
     const safeExtId = escapeHtml(rule['插件ID'] || '-');
@@ -416,34 +512,32 @@ function filterTable() {
     const safeNamePattern = escapeHtml(rule['软件名关键词'] || '-');
     const safeVersion = escapeHtml(rule['版本号'] || '-');
     const safePublisher = escapeHtml(rule['发布者'] || '-');
-    const safeStatus = escapeHtml(rule['状态'] || '-');
-    const safeCategory = escapeHtml(rule['分类'] || '-');
-    const safeNote = escapeHtml(rule['备注'] || '-');
-    const safeBlockReason = escapeHtml(rule['禁止原因'] || '-');
+    const safeStatusCategory = escapeHtml(inlineDisplayValue(rule, '状态/分类') || '-');
+    const safeNoteReason = escapeHtml(inlineDisplayValue(rule, '备注/原因') || '-');
+    const safeAddedBy = escapeHtml(rule['添加人'] || '-');
+    const safeAddedTime = escapeHtml(rule['添加时间'] || '-');
+
     const icon = iconData
       ? `<img class="rule-icon" src="${safeIconData}" alt="" loading="lazy"><span class="rule-icon-fallback" style="display:none;">${fallbackIcon}</span>`
       : `<span class="rule-icon-fallback">${fallbackIcon}</span>`;
 
+    const selectionKey = currentTab + '|' + String(rule.id || '');
+    const isSelected = selectedRuleKeys[selectionKey] === true;
     let html = `
-      <td class="rule-icon-cell">${icon}</td>
+      <td class="select-cell"><input type="checkbox" class="row-select" aria-label="选择规则" ${isSelected ? 'checked' : ''}></td>
+      <td class="rule-icon-cell">${icon.replace('class="rule-icon"', 'class="rule-icon rule-icon-inline"').replace('class="rule-icon-fallback"', 'class="rule-icon-fallback rule-icon-fallback-inline"')}</td>
+      <td>${safeId}</td>
       <td>${safeType}</td>
       <td style="font-size:11px;color:#666;">${safeExtId}</td>
       <td>${safeMatchType}</td>
       <td><strong>${safeNamePattern}</strong></td>
       <td>${safeVersion}</td>
       <td>${safePublisher}</td>
+      <td>${safeStatusCategory}</td>
+      <td style="color:#666;font-size:12px;">${safeNoteReason}</td>
+      <td>${safeAddedBy}</td>
+      <td>${safeAddedTime}</td>
     `;
-
-    if (currentTab === '白名单' || currentTab === '待定') {
-      const statusColor = rule['状态'] === '待定' ? 'color:#2c5282;font-weight:bold;' : 'color:#2f855a;';
-      html += `
-        <td style="${statusColor}">${safeStatus}</td>
-        <td>${safeCategory}</td>
-        <td style="color:#666;font-size:12px;">${safeNote}</td>
-      `;
-    } else {
-      html += `<td>${safeCategory}</td><td style="color:#c0392b;font-size:12px;">${safeBlockReason}</td>`;
-    }
 
     html += `
       <td>
@@ -465,16 +559,169 @@ function filterTable() {
     }
     tbody.appendChild(tr);
     count++;
-  }
+    }
+  updateTakeoverButton();
+  updateBatchSelectionUi();
 
       if (count === 0) {
-    const emptyColspan = (currentTab === '黑名单') ? 10 : 11;
+
+      const emptyColspan = 14;
     tbody.innerHTML = `<tr><td colspan="${emptyColspan}" style="text-align:center;color:#999;padding:20px;">没有找到匹配的规则</td></tr>`;
   }
 
 }
 
+function getCurrentRules() {
+  return rulesData[currentTab] || [];
+}
+
+function getSelectedRuleItems() {
+  return getCurrentRules().filter(function(rule) {
+    return selectedRuleKeys[currentTab + '|' + String(rule.id || '')] === true;
+  }).map(function(rule) {
+    return { id: String(rule.id || '') };
+  });
+}
+
+function updateBatchSelectionUi() {
+  const currentRules = getCurrentRules();
+  const selectedCount = getSelectedRuleItems().length;
+  const countElement = document.getElementById('selectedCount');
+  if (countElement) countElement.textContent = '已选 ' + selectedCount + ' 条';
+  ['batchWhiteButton', 'batchPendingButton', 'batchBlackButton'].forEach(function(id) {
+    const button = document.getElementById(id);
+    if (button) button.disabled = selectedCount === 0;
+  });
+  const selectAllButton = document.getElementById('selectAllButton');
+  if (selectAllButton) selectAllButton.disabled = currentRules.length === 0;
+  const invertButton = document.getElementById('invertSelectionButton');
+  if (invertButton) invertButton.disabled = currentRules.length === 0;
+}
+
+function selectAllCurrentRules() {
+  getCurrentRules().forEach(function(rule) {
+    selectedRuleKeys[currentTab + '|' + String(rule.id || '')] = true;
+  });
+  renderTable();
+}
+
+function invertCurrentSelection() {
+  getCurrentRules().forEach(function(rule) {
+    const key = currentTab + '|' + String(rule.id || '');
+    selectedRuleKeys[key] = selectedRuleKeys[key] !== true;
+  });
+  renderTable();
+}
+
+async function batchMoveSelected(targetSheet) {
+  const items = getSelectedRuleItems();
+  if (items.length === 0) {
+    showToast('请先勾选要处理的规则', true);
+    return;
+  }
+  if (targetSheet === currentTab) {
+    showToast('选中规则已经在' + targetSheet + '，无需移动', true);
+    return;
+  }
+  if (!confirm('确定要将选中的 ' + items.length + ' 条规则移动到' + targetSheet + '吗？')) return;
+  const buttons = ['batchWhiteButton', 'batchPendingButton', 'batchBlackButton'].map(function(id) { return document.getElementById(id); });
+  buttons.forEach(function(button) { if (button) button.disabled = true; });
+  try {
+    const res = await apiPost('/api/manage/batchMove', { sourceSheet: currentTab, targetSheet: targetSheet, items: items });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || '批量分类失败');
+    selectedRuleKeys = {};
+    showToast('批量处理成功：' + data.successCount + ' 条', false);
+    await loadData();
+  } catch (e) {
+    showToast('批量处理失败: ' + e.message, true);
+    updateBatchSelectionUi();
+  }
+}
+
+function updateTakeoverButton() {
+  const button = document.getElementById('takeoverButton');
+  if (!button) return;
+  button.disabled = takeoverUnlocked;
+  button.textContent = takeoverUnlocked ? '已解锁接管' : '接管记录';
+  button.title = takeoverUnlocked ? '本次运行期间已解锁添加人和添加时间编辑' : '输入使用密码后解锁添加人和添加时间编辑';
+}
+
+function openTakeoverModal() {
+  if (takeoverUnlocked) return;
+  document.getElementById('takeoverPassword').value = '';
+  document.getElementById('takeoverOverlay').style.display = 'flex';
+  document.getElementById('takeoverPassword').focus();
+}
+
+function closeTakeoverModal() {
+  document.getElementById('takeoverOverlay').style.display = 'none';
+}
+
+async function submitTakeover(evt) {
+  evt.preventDefault();
+  const button = evt.submitter;
+  if (button) button.disabled = true;
+  try {
+    const res = await apiPost('/api/manage/takeover', {
+      password: document.getElementById('takeoverPassword').value
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || '接管失败');
+    closeTakeoverModal();
+    showToast('接管状态已解锁', false);
+    await loadData();
+  } catch (e) {
+    showToast('接管失败: ' + e.message, true);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function openPasswordModal() {
+  document.getElementById('passwordCurrentSuper').value = '';
+  document.getElementById('passwordNewSuper').value = '';
+  document.getElementById('passwordUsage').value = '';
+  document.getElementById('passwordUsageConfirm').value = '';
+  document.getElementById('passwordOverlay').style.display = 'flex';
+  document.getElementById('passwordCurrentSuper').focus();
+}
+
+function closePasswordModal() {
+  document.getElementById('passwordOverlay').style.display = 'none';
+}
+
+async function submitPasswordSetup(evt) {
+  evt.preventDefault();
+  const usage = document.getElementById('passwordUsage').value;
+  const confirmation = document.getElementById('passwordUsageConfirm').value;
+  if (usage !== confirmation) {
+    showToast('两次使用密码不一致', true);
+    return;
+  }
+  const button = evt.submitter;
+  if (button) button.disabled = true;
+  try {
+    const currentSuper = document.getElementById('passwordCurrentSuper').value;
+    const res = await apiPost('/api/manage/password', {
+      superPassword: currentSuper,
+      currentSuperPassword: currentSuper,
+      newSuperPassword: document.getElementById('passwordNewSuper').value,
+      usagePassword: usage
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || '设置密码失败');
+    closePasswordModal();
+    showToast('接管密码已保存', false);
+  } catch (e) {
+    showToast('设置密码失败: ' + e.message, true);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
 function updateFormFields() {
+
   const type = document.getElementById('formType').value;
   const isSoftware = type === '软件';
   document.getElementById('groupExtId').style.display = isSoftware ? 'none' : 'block';
@@ -507,17 +754,7 @@ function openModal(rule = null, actualSheet = null) {
   document.getElementById('formNamePattern').value = rule ? (rule['软件名关键词'] || '') : '';
   document.getElementById('formVersion').value = rule ? (rule['版本号'] || '') : '';
   document.getElementById('formPublisher').value = rule ? (rule['发布者'] || '') : '';
-  document.getElementById('formCategory').value = rule ? (rule['分类'] || '') : '';
-
-  if (rule && targetSheet === '白名单') {
-    document.getElementById('formNote').value = rule['备注'] || '';
-  } else if (rule && targetSheet === '黑名单') {
-    document.getElementById('formNote').value = rule['禁止原因'] || '';
-  } else if (rule && targetSheet === '待定') {
-    document.getElementById('formNote').value = rule['备注'] || '';
-  } else {
-    document.getElementById('formNote').value = '';
-  }
+  document.getElementById('formNote').value = rule ? inlineDisplayValue(rule, '备注/原因') : '';
 
   updateFormFields();
   document.getElementById('modalOverlay').style.display = 'flex';
@@ -577,8 +814,8 @@ async function saveRule(evt) {
     namePattern: document.getElementById('formNamePattern').value,
     version: document.getElementById('formVersion').value,
     publisher: document.getElementById('formPublisher').value,
-    category: document.getElementById('formCategory').value,
-    note: document.getElementById('formNote').value
+        note: document.getElementById('formNote').value
+
   };
 
   const btn = evt.submitter;
@@ -605,6 +842,18 @@ document.querySelectorAll('.tab[data-tab]').forEach(tab => tab.addEventListener(
 document.getElementById('searchInput').addEventListener('input', filterTable);
 document.getElementById('typeFilter').addEventListener('change', filterTable);
 document.getElementById('undoButton').addEventListener('click', undoLastChange);
+document.getElementById('selectAllButton').addEventListener('click', selectAllCurrentRules);
+document.getElementById('invertSelectionButton').addEventListener('click', invertCurrentSelection);
+document.getElementById('batchWhiteButton').addEventListener('click', () => batchMoveSelected('白名单'));
+document.getElementById('batchPendingButton').addEventListener('click', () => batchMoveSelected('待定'));
+document.getElementById('batchBlackButton').addEventListener('click', () => batchMoveSelected('黑名单'));
+document.getElementById('takeoverButton').addEventListener('click', openTakeoverModal);
+document.getElementById('passwordButton').addEventListener('click', openPasswordModal);
+document.getElementById('cancelTakeoverButton').addEventListener('click', closeTakeoverModal);
+document.getElementById('cancelPasswordButton').addEventListener('click', closePasswordModal);
+document.getElementById('takeoverForm').addEventListener('submit', submitTakeover);
+document.getElementById('passwordForm').addEventListener('submit', submitPasswordSetup);
+
 document.getElementById('addRuleButton').addEventListener('click', () => openModal());
 document.getElementById('cancelModalButton').addEventListener('click', closeModal);
 document.getElementById('formTargetSheet').addEventListener('change', updateFormFields);
@@ -614,6 +863,15 @@ document.getElementById('tableHeader').addEventListener('click', event => {
   const header = event.target.closest('th[data-sort-key]');
   if (header) sortTable(header.dataset.sortKey);
 });
+document.getElementById('tableBody').addEventListener('change', event => {
+  const checkbox = event.target.closest('input.row-select');
+  if (!checkbox) return;
+  const row = checkbox.closest('tr');
+  if (!row || !row.ruleData) return;
+  const key = currentTab + '|' + String(row.ruleData.id || '');
+  selectedRuleKeys[key] = checkbox.checked;
+  updateBatchSelectionUi();
+});
 document.getElementById('tableBody').addEventListener('click', event => {
   const button = event.target.closest('button[data-action]');
   if (!button) return;
@@ -622,6 +880,7 @@ document.getElementById('tableBody').addEventListener('click', event => {
   if (button.dataset.action === 'edit') editRule(row.ruleData, currentTab);
   if (button.dataset.action === 'delete') deleteRule(String(row.ruleData.id || ''), currentTab);
 });
+
 loadData();
 </script>
 </body>

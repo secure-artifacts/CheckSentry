@@ -17,7 +17,11 @@ $script:AllowedMatchTypes = @('插件ID精确', '精确', '包含', '通配符',
 $script:LastUndoSnapshot = $null
 $script:InventoryCache = $null
 $script:IconDataCache = @{}
+$script:RuleIconCache = @{}
+$script:RuleIconDataById = @{}
+$script:ReportIconData = @{}
 $script:MaxRequestChars = 1048576
+$script:TakeoverUnlocked = $false
 
 function Initialize-ImportExcel {
     $requiredVersion = [version]'7.8.10'
@@ -51,10 +55,153 @@ function Initialize-ImportExcel {
 
 function Get-ExpectedHeaders {
     param([string]$SheetName)
-    if ($SheetName -eq '黑名单') {
-        return @('id', '类型', '插件ID', '匹配方式', '软件名关键词', '版本号', '发布者', '分类', '禁止原因', '添加人', '添加时间')
+    return @('id', '类型', '插件ID', '匹配方式', '软件名关键词', '版本号', '发布者', '状态/分类', '备注/原因', '添加人', '添加时间')
+}
+
+function Get-CanonicalRuleStatus {
+    param([string]$SheetName)
+    switch (Assert-AllowedSheet -SheetName $SheetName) {
+        '黑名单' { return '命中黑名单' }
+        '待定' { return '待定' }
+        '白名单' { return '已匹配' }
     }
-    return @('id', '类型', '插件ID', '匹配方式', '软件名关键词', '版本号', '发布者', '状态', '分类', '备注', '添加人', '添加时间')
+}
+
+function Get-RuleSheetHeaderMap {
+    param($Worksheet)
+    $map = @{}
+    if ($null -eq $Worksheet.Dimension) { return $map }
+    for ($column = 1; $column -le $Worksheet.Dimension.End.Column; $column++) {
+        $header = [string]$Worksheet.Cells[1, $column].Text
+        if (-not [string]::IsNullOrWhiteSpace($header)) { $map[$header] = $column }
+    }
+    return $map
+}
+
+function Get-RuleSheetCellValue {
+    param($Worksheet, [hashtable]$HeaderMap, [int]$Row, [string[]]$Names)
+    foreach ($name in $Names) {
+        if ($HeaderMap.ContainsKey($name)) { return $Worksheet.Cells[$Row, $HeaderMap[$name]].Value }
+    }
+    return $null
+}
+
+function Get-UserNoteText {
+    param([object]$Value)
+    $text = [string]$Value
+    if ($text -eq '扫描自动加入待定' -or $text -eq '扫描到的新项目，待归类' -or $text -eq '命中黑名单' -or $text -eq '待定') { return '' }
+    return $text
+}
+
+function Convert-RuleSheetToCanonical {
+    param($Package, [string]$SheetName)
+    $sheet = Assert-AllowedSheet -SheetName $SheetName
+    $worksheet = $Package.Workbook.Worksheets[$sheet]
+    $headers = Get-ExpectedHeaders -SheetName $sheet
+    $headerMap = Get-RuleSheetHeaderMap -Worksheet $worksheet
+    $records = @()
+    if ($null -ne $worksheet.Dimension -and $worksheet.Dimension.End.Row -ge 2) {
+        for ($row = 2; $row -le $worksheet.Dimension.End.Row; $row++) {
+            $hasValue = $false
+            for ($column = 1; $column -le $worksheet.Dimension.End.Column; $column++) {
+                $cell = $worksheet.Cells[$row, $column]
+                if (-not [string]::IsNullOrWhiteSpace([string]$cell.Formula)) { throw "工作表【$sheet】单元格 $($cell.Address) 含公式，无法安全迁移。" }
+                if (-not [string]::IsNullOrWhiteSpace([string]$cell.Value)) { $hasValue = $true }
+            }
+            if (-not $hasValue) { continue }
+            $noteOrReason = Get-UserNoteText (Get-RuleSheetCellValue -Worksheet $worksheet -HeaderMap $headerMap -Row $row -Names @('备注/原因', '备注', '禁止原因'))
+            $record = [ordered]@{
+                id = Get-RuleSheetCellValue -Worksheet $worksheet -HeaderMap $headerMap -Row $row -Names @('id')
+                类型 = Get-RuleSheetCellValue -Worksheet $worksheet -HeaderMap $headerMap -Row $row -Names @('类型')
+                插件ID = Get-RuleSheetCellValue -Worksheet $worksheet -HeaderMap $headerMap -Row $row -Names @('插件ID')
+                匹配方式 = Get-RuleSheetCellValue -Worksheet $worksheet -HeaderMap $headerMap -Row $row -Names @('匹配方式')
+                软件名关键词 = Get-RuleSheetCellValue -Worksheet $worksheet -HeaderMap $headerMap -Row $row -Names @('软件名关键词')
+                版本号 = Get-RuleSheetCellValue -Worksheet $worksheet -HeaderMap $headerMap -Row $row -Names @('版本号')
+                发布者 = Get-RuleSheetCellValue -Worksheet $worksheet -HeaderMap $headerMap -Row $row -Names @('发布者')
+                '状态/分类' = Get-CanonicalRuleStatus -SheetName $sheet
+                '备注/原因' = $noteOrReason
+                添加人 = Get-RuleSheetCellValue -Worksheet $worksheet -HeaderMap $headerMap -Row $row -Names @('添加人')
+                添加时间 = Get-RuleSheetCellValue -Worksheet $worksheet -HeaderMap $headerMap -Row $row -Names @('添加时间')
+            }
+            $records += [PSCustomObject]$record
+        }
+    }
+    if ($null -ne $worksheet.Dimension) { $worksheet.Cells[$worksheet.Dimension.Address].Clear() }
+    for ($column = 1; $column -le $headers.Count; $column++) {
+        $worksheet.Cells[1, $column].Value = $headers[$column - 1]
+        $worksheet.Cells[1, $column].Style.Font.Bold = $true
+    }
+    $targetRow = 2
+    foreach ($record in $records) {
+        for ($column = 1; $column -le $headers.Count; $column++) {
+            $header = $headers[$column - 1]
+            $recordProperty = $record.PSObject.Properties[$header]
+            $recordValue = if ($null -ne $recordProperty) { $recordProperty.Value } else { '' }
+            $worksheet.Cells[$targetRow, $column].Value = $recordValue
+            $worksheet.Cells[$targetRow, $column].Style.Numberformat.Format = '@'
+        }
+        $targetRow++
+    }
+}
+
+function Test-WorkbookCanonicalSchema {
+    param([string]$Path)
+    $package = $null
+    try {
+        $package = Open-ExcelPackage -Path $Path -ErrorAction Stop
+        foreach ($sheetName in $script:AllowedSheets) {
+            $worksheet = $package.Workbook.Worksheets[$sheetName]
+            $headers = Get-ExpectedHeaders -SheetName $sheetName
+            if ($null -eq $worksheet -or $null -eq $worksheet.Dimension) { return $true }
+            for ($column = 1; $column -le $headers.Count; $column++) {
+                if ([string]($worksheet.Cells[1, $column].Text) -ne $headers[$column - 1]) { return $true }
+            }
+            if ($worksheet.Dimension.End.Column -gt $headers.Count) {
+                for ($column = $headers.Count + 1; $column -le $worksheet.Dimension.End.Column; $column++) {
+                    for ($row = 1; $row -le $worksheet.Dimension.End.Row; $row++) {
+                        if (-not [string]::IsNullOrWhiteSpace([string]($worksheet.Cells[$row, $column].Value))) { return $true }
+                    }
+                }
+            }
+        }
+        return $false
+    } finally {
+        if ($null -ne $package) { $package.Dispose() }
+    }
+}
+
+function Repair-WorkbookSchema {
+    param([string]$Path)
+    Test-ListFileAvailable -Path $Path
+    $fingerprintBefore = Get-FileFingerprint -Path $Path
+    $directory = [System.IO.Path]::GetDirectoryName($Path)
+    $temporaryPath = Join-Path $directory ('.' + [System.IO.Path]::GetFileName($Path) + '.' + [guid]::NewGuid().ToString('N') + '.schema.xlsx')
+    $package = $null
+    try {
+        Copy-Item -LiteralPath $Path -Destination $temporaryPath -ErrorAction Stop
+        $package = Open-ExcelPackage -Path $temporaryPath -ErrorAction Stop
+        foreach ($sheetName in $script:AllowedSheets) { Convert-RuleSheetToCanonical -Package $package -SheetName $sheetName }
+        Assert-WorkbookPackageSchema -Package $package
+        Close-ExcelPackage -ExcelPackage $package -ErrorAction Stop
+        $package = $null
+        if (-not (Test-WorkbookXmlNamespace -Path $temporaryPath)) { Normalize-WorkbookXmlNamespace -Path $temporaryPath }
+        if (-not (Test-WorkbookXmlNamespace -Path $temporaryPath)) { throw "清单字段迁移后的 XML 未通过标准检查：$Path" }
+        Assert-WorkbookPathSchema -Path $temporaryPath
+        if ((Get-FileFingerprint -Path $Path) -ne $fingerprintBefore) { throw '清单在字段迁移期间被外部修改，已取消迁移。' }
+        Set-WorkbookFileFromTemp -NewPath $temporaryPath -DestinationPath $Path
+    } finally {
+        if ($null -ne $package) { $package.Dispose() }
+        if (Test-Path -LiteralPath $temporaryPath -PathType Leaf) { Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+function Ensure-CanonicalWorkbookSchema {
+    param([string]$Path)
+    if (Test-WorkbookCanonicalSchema -Path $Path) {
+        Write-Host "检测到旧版清单字段，正在安全统一三张规则表：$Path" -ForegroundColor Yellow
+        Repair-WorkbookSchema -Path $Path
+        Write-Host "清单字段已统一为状态/分类与备注/原因：$Path" -ForegroundColor Green
+    }
 }
 
 function Assert-AllowedSheet {
@@ -311,9 +458,11 @@ function Convert-WorksheetToRules {
             if (-not [string]::IsNullOrWhiteSpace([string]$cell.Formula)) {
                 throw "工作表【$SheetName】单元格 $($cell.Address) 含公式。规则清单只允许纯文本/数值。"
             }
-            $value = $cell.Value
+                        $value = $cell.Value
+            if ($headers[$column - 1] -eq '备注/原因') { $value = Get-UserNoteText $value }
             if ($null -ne $value -and -not [string]::IsNullOrWhiteSpace([string]$value)) { $hasValue = $true }
             $ordered[$headers[$column - 1]] = $value
+
         }
         if ($hasValue) { $rules += [PSCustomObject]$ordered }
     }
@@ -513,7 +662,170 @@ function Get-LimitedText {
     return $text
 }
 
+function Get-TakeoverSettingsPath {
+    return (Join-Path $PSScriptRoot 'CheckSentry.settings.json')
+}
+
+function New-PasswordRecord {
+    param([string]$Password)
+    if ([string]::IsNullOrWhiteSpace($Password)) { throw '密码不能为空。' }
+    $saltBytes = New-Object byte[] 16
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($saltBytes) } finally { $rng.Dispose() }
+    $salt = [Convert]::ToBase64String($saltBytes)
+    $iterations = 120000
+    $kdf = New-Object -TypeName System.Security.Cryptography.Rfc2898DeriveBytes -ArgumentList @($Password, $saltBytes, $iterations)
+    try { $hash = [Convert]::ToBase64String($kdf.GetBytes(32)) } finally { $kdf.Dispose() }
+    return [ordered]@{ salt = $salt; hash = $hash; iterations = $iterations }
+}
+
+function Test-PasswordRecordShape {
+    param($Record)
+    try {
+        $saltBytes = [Convert]::FromBase64String([string]$Record.salt)
+        $hashBytes = [Convert]::FromBase64String([string]$Record.hash)
+        $iterations = [int]$Record.iterations
+        return ($saltBytes.Length -ge 16 -and $hashBytes.Length -eq 32 -and $iterations -ge 10000 -and $iterations -le 1000000)
+    } catch { return $false }
+}
+
+function Test-PasswordRecord {
+    param([string]$Password, $Record)
+    if ($null -eq $Record -or [string]::IsNullOrWhiteSpace($Password) -or -not (Test-PasswordRecordShape -Record $Record)) { return $false }
+    try {
+        $saltBytes = [Convert]::FromBase64String([string]$Record.salt)
+        $expected = [Convert]::FromBase64String([string]$Record.hash)
+        $iterations = [int]$Record.iterations
+        $kdf = New-Object -TypeName System.Security.Cryptography.Rfc2898DeriveBytes -ArgumentList @($Password, $saltBytes, $iterations)
+        try { $actual = $kdf.GetBytes($expected.Length) } finally { $kdf.Dispose() }
+        $difference = 0
+        for ($index = 0; $index -lt $expected.Length; $index++) { $difference = $difference -bor ($actual[$index] -bxor $expected[$index]) }
+        return ($difference -eq 0)
+    } catch { return $false }
+}
+
+function Read-TakeoverSettings {
+    $path = Get-TakeoverSettingsPath
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
+    try {
+        $fileInfo = Get-Item -LiteralPath $path -ErrorAction Stop
+        if ($fileInfo.Length -gt 16384) { throw '配置文件过大。' }
+        $raw = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+        if ([string]::IsNullOrWhiteSpace($raw)) { throw '配置文件为空。' }
+        $settings = $raw | ConvertFrom-Json
+        if ([int]$settings.version -ne 1 -or $null -eq $settings.super -or $null -eq $settings.usage) { throw '配置版本或密码记录缺失。' }
+        if (-not (Test-PasswordRecordShape -Record $settings.super) -or -not (Test-PasswordRecordShape -Record $settings.usage)) { throw '密码记录无效。' }
+        return $settings
+    } catch { throw '接管密码配置文件无效，请删除 CheckSentry.settings.json 后重新设置。' }
+}
+
+function Write-TakeoverSettings {
+    param($Settings)
+    $path = Get-TakeoverSettingsPath
+    $directory = [System.IO.Path]::GetDirectoryName($path)
+    $temporaryPath = Join-Path $directory ('.CheckSentry.settings.json.' + [guid]::NewGuid().ToString('N') + '.tmp')
+    try {
+        $json = $Settings | ConvertTo-Json -Depth 5
+        $utf8NoBom = New-Object -TypeName System.Text.UTF8Encoding -ArgumentList @($false)
+        [System.IO.File]::WriteAllText($temporaryPath, $json, $utf8NoBom)
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            $backupPath = $path + '.' + [guid]::NewGuid().ToString('N') + '.bak'
+            try {
+                [System.IO.File]::Replace($temporaryPath, $path, $backupPath, $true)
+            } finally {
+                if (Test-Path -LiteralPath $backupPath -PathType Leaf) { Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue }
+            }
+        } else {
+            [System.IO.File]::Move($temporaryPath, $path)
+        }
+    } finally {
+        if (Test-Path -LiteralPath $temporaryPath -PathType Leaf) { Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+function Set-TakeoverPasswords {
+    param($Data)
+    $existing = Read-TakeoverSettings
+    if ($null -eq $existing) {
+        $superPassword = Get-LimitedText -Value $Data.superPassword -FieldName '超级密码' -MaximumLength 256 -Required
+        $usagePassword = Get-LimitedText -Value $Data.usagePassword -FieldName '使用密码' -MaximumLength 256 -Required
+        $settings = [ordered]@{ version = 1; super = (New-PasswordRecord -Password $superPassword); usage = (New-PasswordRecord -Password $usagePassword) }
+    } else {
+        $currentSuperPassword = Get-LimitedText -Value $Data.currentSuperPassword -FieldName '当前超级密码' -MaximumLength 256 -Required
+        if (-not (Test-PasswordRecord -Password $currentSuperPassword -Record $existing.super)) { throw '超级密码不正确。' }
+        $newUsagePassword = Get-LimitedText -Value $Data.usagePassword -FieldName '使用密码' -MaximumLength 256 -Required
+        $newSuperPassword = Get-LimitedText -Value $Data.newSuperPassword -FieldName '新超级密码' -MaximumLength 256
+        $superRecord = if ([string]::IsNullOrWhiteSpace($newSuperPassword)) { $existing.super } else { New-PasswordRecord -Password $newSuperPassword }
+        $settings = [ordered]@{ version = 1; super = $superRecord; usage = (New-PasswordRecord -Password $newUsagePassword) }
+    }
+    Write-TakeoverSettings -Settings $settings
+}
+
+function Get-RuleMetadataByIdFromPackage {
+    param($Package, [string]$SheetName, [string]$RuleId)
+    $sheet = Assert-AllowedSheet -SheetName $SheetName
+    if ($RuleId -notmatch '^\d{1,10}$') { throw '规则 ID 无效。' }
+    $worksheet = $Package.Workbook.Worksheets[$sheet]
+    if ($null -eq $worksheet.Dimension) { throw "工作表【$sheet】中不存在规则 $RuleId。" }
+    $headers = Get-ExpectedHeaders -SheetName $sheet
+    $idColumn = [array]::IndexOf($headers, 'id') + 1
+    $addedByColumn = [array]::IndexOf($headers, '添加人') + 1
+    $addedTimeColumn = [array]::IndexOf($headers, '添加时间') + 1
+    for ($row = 2; $row -le $worksheet.Dimension.End.Row; $row++) {
+        if ([string]($worksheet.Cells[$row, $idColumn].Value) -eq $RuleId) {
+            return [PSCustomObject]@{
+                添加人 = [string]($worksheet.Cells[$row, $addedByColumn].Value)
+                添加时间 = [string]($worksheet.Cells[$row, $addedTimeColumn].Value)
+            }
+        }
+    }
+    throw "工作表【$sheet】中不存在规则 $RuleId。"
+}
+
+
+function Get-RuleByIdFromPackage {
+    param($Package, [string]$SheetName, [string]$RuleId)
+    $sheet = Assert-AllowedSheet -SheetName $SheetName
+    if ($RuleId -notmatch '^\d{1,10}$') { throw '规则 ID 无效。' }
+    $worksheet = $Package.Workbook.Worksheets[$sheet]
+    if ($null -eq $worksheet.Dimension) { throw "工作表【$sheet】中不存在规则 $RuleId。" }
+    $headers = Get-ExpectedHeaders -SheetName $sheet
+    for ($row = 2; $row -le $worksheet.Dimension.End.Row; $row++) {
+        if ([string]($worksheet.Cells[$row, 1].Value) -eq $RuleId) {
+            $record = [ordered]@{}
+            for ($column = 1; $column -le $headers.Count; $column++) {
+                $record[$headers[$column - 1]] = [string]($worksheet.Cells[$row, $column].Value)
+            }
+            return [PSCustomObject]$record
+        }
+    }
+    throw "工作表【$sheet】中不存在规则 $RuleId。"
+}
+
+function Set-RuleMetadataByIdInPackage {
+    param($Package, [string]$SheetName, [string]$RuleId, [string]$AddedBy, [string]$AddedTime)
+    $sheet = Assert-AllowedSheet -SheetName $SheetName
+    if ($RuleId -notmatch '^\d{1,10}$') { throw '规则 ID 无效。' }
+    $worksheet = $Package.Workbook.Worksheets[$sheet]
+    if ($null -eq $worksheet.Dimension) { throw "工作表【$sheet】中不存在规则 $RuleId。" }
+    $headers = Get-ExpectedHeaders -SheetName $sheet
+    $idColumn = [array]::IndexOf($headers, 'id') + 1
+    $addedByColumn = [array]::IndexOf($headers, '添加人') + 1
+    $addedTimeColumn = [array]::IndexOf($headers, '添加时间') + 1
+    for ($row = 2; $row -le $worksheet.Dimension.End.Row; $row++) {
+        if ([string]($worksheet.Cells[$row, $idColumn].Value) -eq $RuleId) {
+            $worksheet.Cells[$row, $addedByColumn].Value = $AddedBy
+            $worksheet.Cells[$row, $addedByColumn].Style.Numberformat.Format = '@'
+            $worksheet.Cells[$row, $addedTimeColumn].Value = $AddedTime
+            $worksheet.Cells[$row, $addedTimeColumn].Style.Numberformat.Format = '@'
+            return
+        }
+    }
+    throw "工作表【$sheet】中不存在规则 $RuleId。"
+}
+
 function Convert-InputToRule {
+
     param($Data, [string]$TargetSheet)
     $sheet = Assert-AllowedSheet -SheetName $TargetSheet
     $itemType = Get-LimitedText -Value $Data.type -FieldName '类型' -MaximumLength 32 -Required
@@ -532,6 +844,22 @@ function Convert-InputToRule {
             throw "正则表达式无效或执行超时：$($_.Exception.Message)"
         }
     }
+    $note = Get-LimitedText -Value $Data.note -FieldName '备注/原因' -MaximumLength 2000
+    $addedBy = Get-LimitedText -Value $Data.addedBy -FieldName '添加人' -MaximumLength 128
+    $addedTime = Get-LimitedText -Value $Data.addedTime -FieldName '添加时间' -MaximumLength 128
+    if (-not $script:TakeoverUnlocked) {
+        $addedBy = [string]$env:USERNAME
+        if ([string]::IsNullOrWhiteSpace($addedBy)) { $addedBy = [Environment]::UserName }
+        $addedBy = Get-LimitedText -Value $addedBy -FieldName '添加人' -MaximumLength 128 -Required
+        $addedTime = Get-Date -Format 'yyyy-MM-dd HH:mm'
+    } else {
+        if ([string]::IsNullOrWhiteSpace($addedBy)) {
+            $addedBy = [string]$env:USERNAME
+            if ([string]::IsNullOrWhiteSpace($addedBy)) { $addedBy = [Environment]::UserName }
+        }
+        $addedBy = Get-LimitedText -Value $addedBy -FieldName '添加人' -MaximumLength 128 -Required
+        if ([string]::IsNullOrWhiteSpace($addedTime)) { $addedTime = Get-Date -Format 'yyyy-MM-dd HH:mm' }
+    }
     $rule = [ordered]@{
         类型 = $itemType
         插件ID = $extensionId
@@ -539,16 +867,14 @@ function Convert-InputToRule {
         软件名关键词 = $namePattern
         版本号 = Get-LimitedText -Value $Data.version -FieldName '版本号' -MaximumLength 128
         发布者 = Get-LimitedText -Value $Data.publisher -FieldName '发布者' -MaximumLength 256
-        分类 = Get-LimitedText -Value $Data.category -FieldName '分类' -MaximumLength 128
-        添加人 = Get-LimitedText -Value $env:USERNAME -FieldName '添加人' -MaximumLength 128
-        添加时间 = Get-Date -Format 'yyyy-MM-dd HH:mm'
+        '状态/分类' = Get-CanonicalRuleStatus -SheetName $sheet
+        '备注/原因' = $note
+        添加人 = $addedBy
+        添加时间 = $addedTime
     }
-    $note = Get-LimitedText -Value $Data.note -FieldName '备注' -MaximumLength 2000
-    if ($sheet -eq '黑名单') { $rule.禁止原因 = $note }
-    elseif ($sheet -eq '待定') { $rule.状态 = '待定'; $rule.备注 = $note }
-    else { $rule.状态 = '允许'; $rule.备注 = $note }
     return [PSCustomObject]$rule
 }
+
 
 function Get-RuleIdentity {
     param([string]$ItemType, [string]$ExtensionId, [string]$NamePattern)
@@ -726,6 +1052,26 @@ function Find-FirstMatchingRule {
 function New-ComplianceItem {
     param($Source, [string]$ItemType, [string]$Status, [string]$Reason, $MatchedRule, [string]$MatchedSheet)
     $isSoftware = $ItemType -eq '软件'
+    $iconPath = if ($isSoftware) { [string]$Source.图标路径 } else { [string]$Source.IconPath }
+    $iconIndex = if ($isSoftware) { [int]$Source.图标索引 } else { 0 }
+    $reportIconDataUri = ''
+    if (-not [string]::IsNullOrWhiteSpace($iconPath)) {
+        $reportIconDataUri = Get-LocalIconDataUri -Path $iconPath -IconIndex $iconIndex
+        $displayName = if ($isSoftware) { [string]$Source.名称 } else { [string]$Source.Name }
+        $extensionId = if ($isSoftware) { '' } else { [string]$Source.ExtensionId }
+        $reportIconKey = '{0}|{1}|{2}' -f $ItemType, $displayName.ToLowerInvariant(), $extensionId.ToLowerInvariant()
+        if (-not [string]::IsNullOrWhiteSpace($reportIconDataUri)) {
+            $script:ReportIconData[$reportIconKey] = [PSCustomObject]@{ ItemType = $ItemType; Name = $displayName; Publisher = if ($isSoftware) { [string]$Source.发布者 } else { [string]$Source.Publisher }; ExtensionId = $extensionId; DataUri = $reportIconDataUri }
+        }
+    }
+    if ($null -ne $MatchedRule -and -not [string]::IsNullOrWhiteSpace($iconPath)) {
+        $ruleType = if ([string]::IsNullOrWhiteSpace([string]$MatchedRule.'类型')) { $ItemType } else { [string]$MatchedRule.'类型' }
+        $ruleIdentity = Get-RuleIdentity -ItemType $ruleType -ExtensionId ([string]$MatchedRule.'插件ID') -NamePattern ([string]$MatchedRule.'软件名关键词')
+        $script:RuleIconCache[$ruleIdentity] = [PSCustomObject]@{ Path = $iconPath; Index = $iconIndex; DataUri = $reportIconDataUri }
+        if (-not [string]::IsNullOrWhiteSpace([string]$MatchedRule.id) -and -not [string]::IsNullOrWhiteSpace($reportIconDataUri)) {
+            $script:RuleIconDataById[[string]$MatchedRule.id] = $reportIconDataUri
+        }
+    }
     return [PSCustomObject]@{
         名称 = if ($isSoftware) { [string]$Source.名称 } else { [string]$Source.Name }
         版本 = if ($isSoftware) { [string]$Source.版本 } else { [string]$Source.Version }
@@ -737,9 +1083,11 @@ function New-ComplianceItem {
         类型 = $ItemType
         插件ID = if ($isSoftware) { '' } else { [string]$Source.ExtensionId }
         Locations = if ($isSoftware) { $null } else { $Source.Locations }
-        图标路径 = if ($isSoftware) { [string]$Source.图标路径 } else { [string]$Source.IconPath }
-        图标索引 = if ($isSoftware) { [int]$Source.图标索引 } else { 0 }
+        图标路径 = $iconPath
+        图标索引 = $iconIndex
+        图标数据 = $reportIconDataUri
         MatchedSheet = $MatchedSheet
+        MatchedRule = $MatchedRule
         MatchedRuleId = if ($null -ne $MatchedRule) { $MatchedRule.id } else { $null }
     }
 }
@@ -754,32 +1102,36 @@ function Get-ComplianceResult {
         $extensionId = if ($ItemType -eq '软件') { '' } else { [string]$item.ExtensionId }
 
         $black = Find-FirstMatchingRule -Rules $BlackRules -ItemType $ItemType -DisplayName $displayName -Publisher $publisher -ExtensionId $extensionId
-        if ($null -ne $black) {
-            $reason = if ([string]::IsNullOrWhiteSpace([string]$black.'禁止原因')) { '命中黑名单' } else { [string]$black.'禁止原因' }
+                if ($null -ne $black) {
+            $reason = Get-UserNoteText $black.'备注/原因'
             $results += New-ComplianceItem -Source $item -ItemType $ItemType -Status '命中黑名单' -Reason $reason -MatchedRule $black -MatchedSheet '黑名单'
+
             continue
         }
 
         $white = Find-FirstMatchingRule -Rules $WhiteRules -ItemType $ItemType -DisplayName $displayName -Publisher $publisher -ExtensionId $extensionId
         if ($null -ne $white) {
             if (Test-VersionMatch -InstalledVersion $version -RuleVersion ([string]$white.'版本号')) {
-                $reason = if ([string]::IsNullOrWhiteSpace([string]$white.'备注')) { '' } else { [string]$white.'备注' }
+                                $reason = Get-UserNoteText $white.'备注/原因'
+
                 $results += New-ComplianceItem -Source $item -ItemType $ItemType -Status '已匹配' -Reason $reason -MatchedRule $white -MatchedSheet '白名单'
             } else {
-                $reason = "清单登记版本为 [$($white.'版本号')]，当前安装版本为 [$version]"
-                $results += New-ComplianceItem -Source $item -ItemType $ItemType -Status '版本变化' -Reason $reason -MatchedRule $white -MatchedSheet '白名单'
+                                $results += New-ComplianceItem -Source $item -ItemType $ItemType -Status '版本变化' -Reason '' -MatchedRule $white -MatchedSheet '白名单'
+
             }
             continue
         }
 
         $pending = Find-FirstMatchingRule -Rules $PendingRules -ItemType $ItemType -DisplayName $displayName -Publisher $publisher -ExtensionId $extensionId
-        if ($null -ne $pending) {
-            $reason = if ([string]::IsNullOrWhiteSpace([string]$pending.'备注')) { '待定' } else { [string]$pending.'备注' }
+                if ($null -ne $pending) {
+            $reason = Get-UserNoteText $pending.'备注/原因'
             $results += New-ComplianceItem -Source $item -ItemType $ItemType -Status '待定' -Reason $reason -MatchedRule $pending -MatchedSheet '待定'
+
             continue
         }
 
-        $results += New-ComplianceItem -Source $item -ItemType $ItemType -Status '待定' -Reason '扫描到的新项目，待归类' -MatchedRule $null -MatchedSheet ''
+                $results += New-ComplianceItem -Source $item -ItemType $ItemType -Status '待定' -Reason '' -MatchedRule $null -MatchedSheet ''
+
     }
     return $results
 }
@@ -803,9 +1155,9 @@ function Add-NewPendingRules {
                 matchType = if ($itemType -eq '软件') { '精确' } else { '插件ID精确' }
                 namePattern = [string]$item.名称
                 version = ''
-                publisher = [string]$item.发布者
-                category = ''
-                note = '扫描自动加入待定'
+                                publisher = [string]$item.发布者
+                note = ''
+
             }
             $rule = Convert-InputToRule -Data $ruleData -TargetSheet '待定'
             $null = Add-RuleToPackageWithState -State $pendingState -Rule $rule
@@ -819,12 +1171,64 @@ function Add-NewPendingRules {
     return $count
 }
 
+function Clear-SystemGeneratedRuleNotes {
+    param([string]$Path)
+    $probePackage = $null
+    $needsClear = $false
+    try {
+        $probePackage = Open-ExcelPackage -Path $Path -ErrorAction Stop
+        Assert-WorkbookPackageSchema -Package $probePackage
+        foreach ($sheetName in $script:AllowedSheets) {
+            $worksheet = $probePackage.Workbook.Worksheets[$sheetName]
+            if ($null -eq $worksheet.Dimension) { continue }
+            $headers = Get-ExpectedHeaders -SheetName $sheetName
+            $noteColumn = [array]::IndexOf($headers, '备注/原因') + 1
+            for ($row = 2; $row -le $worksheet.Dimension.End.Row; $row++) {
+                $rawNote = [string]($worksheet.Cells[$row, $noteColumn].Value)
+                if ($rawNote -ne (Get-UserNoteText $rawNote)) {
+                    $needsClear = $true
+                    break
+                }
+            }
+            if ($needsClear) { break }
+        }
+    } finally {
+        if ($null -ne $probePackage) { $probePackage.Dispose() }
+    }
+    if (-not $needsClear) { return 0 }
+    $operation = {
+        param($package)
+        $cleared = 0
+        foreach ($sheetName in $script:AllowedSheets) {
+            $worksheet = $package.Workbook.Worksheets[$sheetName]
+            if ($null -eq $worksheet.Dimension) { continue }
+            $headers = Get-ExpectedHeaders -SheetName $sheetName
+            $noteColumn = [array]::IndexOf($headers, '备注/原因') + 1
+            for ($row = 2; $row -le $worksheet.Dimension.End.Row; $row++) {
+                $cell = $worksheet.Cells[$row, $noteColumn]
+                if (([string]$cell.Value) -ne (Get-UserNoteText $cell.Value)) {
+                    $cell.Value = ''
+                    $cell.Style.Numberformat.Format = '@'
+                    $cleared++
+                }
+            }
+        }
+        return $cleared
+    }
+    return Invoke-WorkbookTransaction -Path $Path -Operation $operation
+}
+
 function Get-InventoryData {
+
     param([switch]$ForceRefresh, [switch]$IncludeSystem)
-    if (-not $ForceRefresh -and $null -ne $script:InventoryCache) {
+        if (-not $ForceRefresh -and $null -ne $script:InventoryCache) {
         return $script:InventoryCache
     }
+    if ($ForceRefresh -and $null -ne $script:RuleIconCache) { $script:RuleIconCache.Clear() }
+    if ($ForceRefresh -and $null -ne $script:RuleIconDataById) { $script:RuleIconDataById.Clear() }
+    if ($ForceRefresh -and $null -ne $script:ReportIconData) { $script:ReportIconData.Clear() }
     $script:InventoryCache = [PSCustomObject]@{
+
         Software = @(Get-InstalledSoftwareList -IncludeSystemComponents:$IncludeSystem)
         Chromium = @(Get-ChromiumExtensions)
         Firefox = @(Get-FirefoxExtensions)
@@ -929,9 +1333,33 @@ function Get-LocalIconDataUri {
 
 function Get-RuleIconDataUri {
     param($Rule, [bool]$IncludeSystem)
-    $inventory = Get-InventoryData -IncludeSystem:$IncludeSystem
+    $ruleId = [string]$Rule.id
+    if (-not [string]::IsNullOrWhiteSpace($ruleId) -and $script:RuleIconDataById.ContainsKey($ruleId)) {
+        $idUri = [string]$script:RuleIconDataById[$ruleId]
+        if (-not [string]::IsNullOrWhiteSpace($idUri)) { return $idUri }
+    }
     $itemType = if ([string]::IsNullOrWhiteSpace([string]$Rule.'类型')) { '软件' } else { [string]$Rule.'类型' }
-    $iconPath = ''
+    $ruleIdentity = Get-RuleIdentity -ItemType $itemType -ExtensionId ([string]$Rule.'插件ID') -NamePattern ([string]$Rule.'软件名关键词')
+    foreach ($reportRecord in @($script:ReportIconData.Values)) {
+        if ([string]$reportRecord.ItemType -ne $itemType) { continue }
+        if ($itemType -eq '软件') {
+            if (-not (Test-NameMatch -InstalledName ([string]$reportRecord.Name) -Rule $Rule)) { continue }
+            if (-not (Test-PublisherMatch -InstalledPublisher ([string]$reportRecord.Publisher) -RulePublisher $Rule.'发布者')) { continue }
+            if (-not [string]::IsNullOrWhiteSpace([string]$reportRecord.DataUri)) { return [string]$reportRecord.DataUri }
+        } elseif ([string]::Equals([string]$reportRecord.ExtensionId, [string]$Rule.'插件ID', [System.StringComparison]::OrdinalIgnoreCase)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$reportRecord.DataUri)) { return [string]$reportRecord.DataUri }
+        }
+    }
+    if ($script:RuleIconCache.ContainsKey($ruleIdentity)) {
+        $cached = $script:RuleIconCache[$ruleIdentity]
+        if (-not [string]::IsNullOrWhiteSpace([string]$cached.DataUri)) { return [string]$cached.DataUri }
+        $cachedUri = Get-LocalIconDataUri -Path ([string]$cached.Path) -IconIndex ([int]$cached.Index)
+        if (-not [string]::IsNullOrWhiteSpace($cachedUri)) { return $cachedUri }
+    }
+    $inventory = Get-InventoryData -IncludeSystem:$IncludeSystem
+
+        $iconPath = ''
+
     $iconIndex = 0
     if ($itemType -eq '软件') {
         $software = $inventory.Software | Where-Object {
@@ -948,8 +1376,19 @@ function Get-RuleIconDataUri {
     return Get-LocalIconDataUri -Path $iconPath -IconIndex $iconIndex
 }
 
+function Prime-RuleIconCacheFromReport {
+    param([object]$Inventory, [object]$AllRules, [bool]$IncludeSystem)
+    $black = @($AllRules.'黑名单')
+    $white = @($AllRules.'白名单')
+    $pending = @($AllRules.'待定')
+    $null = @(Get-ComplianceResult -Installed $Inventory.Software -BlackRules $black -WhiteRules $white -PendingRules $pending -ItemType '软件')
+    $null = @(Get-ComplianceResult -Installed $Inventory.Chromium -BlackRules $black -WhiteRules $white -PendingRules $pending -ItemType 'Chromium插件')
+    $null = @(Get-ComplianceResult -Installed $Inventory.Firefox -BlackRules $black -WhiteRules $white -PendingRules $pending -ItemType 'Firefox插件')
+}
+
 function Convert-RulesForWeb {
     param([object[]]$Rules, [bool]$IncludeSystem)
+
     $output = @()
     foreach ($rule in @($Rules)) {
         $ordered = [ordered]@{}
@@ -970,10 +1409,16 @@ function Get-RowHtml {
     $name = ConvertTo-HtmlEncodedText $Item.名称
     $version = ConvertTo-HtmlEncodedText $Item.版本
     $publisher = ConvertTo-HtmlEncodedText $Item.发布者
-    $reason = ConvertTo-HtmlEncodedText $Item.原因
+        $reason = ConvertTo-HtmlEncodedText $Item.原因
     $status = ConvertTo-HtmlEncodedText $Item.状态
+    $matchedRule = $Item.MatchedRule
+    $noteReason = if ($null -ne $matchedRule) { ConvertTo-HtmlEncodedText $matchedRule.'备注/原因' } else { '' }
+    $addedBy = if ($null -ne $matchedRule) { ConvertTo-HtmlEncodedText $matchedRule.'添加人' } else { '' }
+    $addedTime = if ($null -ne $matchedRule) { ConvertTo-HtmlEncodedText $matchedRule.'添加时间' } else { '' }
+
     $typeIcon = if ($Item.类型 -eq '软件') { '&#128187;' } elseif ($Item.类型 -eq 'Chromium插件') { '&#127760;' } else { '&#129418;' }
-    $iconSource = Get-LocalIconDataUri -Path ([string]$Item.图标路径) -IconIndex ([int]$Item.图标索引)
+        $iconSource = if (-not [string]::IsNullOrWhiteSpace([string]$Item.图标数据)) { [string]$Item.图标数据 } else { Get-LocalIconDataUri -Path ([string]$Item.图标路径) -IconIndex ([int]$Item.图标索引) }
+
     $iconHtml = if ($iconSource) { "<img class='item-icon' src='$(ConvertTo-HtmlEncodedText $iconSource)' alt='' loading='lazy'><span class='type-fallback hidden'>$typeIcon</span>" } else { "<span class='type-fallback'>$typeIcon</span>" }
 
     $locationText = ''
@@ -1014,9 +1459,11 @@ function Get-RowHtml {
           <label>匹配方式<select name="matchType">$matchOptions</select></label>
           <label>关键词<input type="text" name="namePattern" value="$name" maxlength="512"></label>
           <label>版本号（留空=不锁版本）<input type="text" name="version" value="" maxlength="128"><button type="button" class="use-current-version" data-current-version="$version">用当前版本</button></label>
-          <label>发布者<input type="text" name="publisher" value="$publisher" maxlength="256"></label>
-          <label>分类<input type="text" name="category" value="" maxlength="128"></label>
-          <label>备注<input type="text" name="note" value="" maxlength="2000"></label>
+                    <label>发布者<input type="text" name="publisher" value="$publisher" maxlength="256"></label>
+          <label>备注/原因<input type="text" name="note" value="$noteReason" maxlength="2000"></label>
+          <label>添加人<input type="text" value="$addedBy" readonly></label>
+          <label>添加时间<input type="text" value="$addedTime" readonly></label>
+
           <div class="btnrow"><button type="submit" data-status="允许" class="btn-approve">加入白名单（允许）</button><button type="submit" data-status="禁止" class="btn-ban">加入黑名单（禁止）</button><button type="submit" data-status="待定" class="btn-pending">标记待定</button></div>
         </form></details>
 "@
@@ -1035,7 +1482,7 @@ function Build-ReportHtml {
     $green = @($Results | Where-Object { $_.状态 -eq '已匹配' })
     $redSoftware = @($red | Where-Object { $_.类型 -eq '软件' })
     $redPlugins = @($red | Where-Object { $_.类型 -ne '软件' })
-    $tableHead = '<table><thead><tr><th class="chk-cell"></th><th>图标 / 名称</th><th>版本</th><th>发布者</th><th>状态</th><th>原因</th><th>操作</th></tr></thead><tbody>'
+    $tableHead = '<table><thead><tr><th class="chk-cell"></th><th>图标 / 名称</th><th>版本</th><th>发布者</th><th>状态/分类</th><th>备注/原因</th><th>操作</th></tr></thead><tbody>'
     $tableTail = '</tbody></table>'
     $body = ''
     $sections = @(
@@ -1153,11 +1600,17 @@ function Write-RuleChange {
     $identity = Get-RuleIdentity -ItemType $rule.类型 -ExtensionId $rule.插件ID -NamePattern $rule.软件名关键词
     $originalSheet = [string]$Data.originalSheet
     $originalId = [string]$Data.id
+    $hasMetadataInput = ($Data.metadataEdit -eq $true)
     $isExplicitClassification = $ExplicitClassification.IsPresent
     $operation = {
         param($package)
         if (-not [string]::IsNullOrWhiteSpace($originalId)) {
             $null = Assert-AllowedSheet -SheetName $originalSheet
+            $metadata = Get-RuleMetadataByIdFromPackage -Package $package -SheetName $originalSheet -RuleId $originalId
+            if (-not $script:TakeoverUnlocked -or -not $hasMetadataInput) {
+                $rule.添加人 = $metadata.添加人
+                $rule.添加时间 = $metadata.添加时间
+            }
             Remove-RuleByIdFromPackage -Package $package -SheetName $originalSheet -RuleId $originalId
         }
         if ($isExplicitClassification -or -not [string]::IsNullOrWhiteSpace($originalId)) {
@@ -1227,12 +1680,16 @@ function Start-ReportServer {
                     $template = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'management_template.html') -Raw -Encoding UTF8
                     $template = $template.Replace('__CSRF_TOKEN__', (ConvertTo-HtmlEncodedText $csrfToken)).Replace('__CSP_NONCE__', (ConvertTo-HtmlEncodedText $nonce))
                     Write-HtmlResponse -Response $response -Html $template -StatusCode 200 -Nonce $nonce
-                } elseif ($request.HttpMethod -eq 'GET' -and $route -eq '/api/rules') {
+                                } elseif ($request.HttpMethod -eq 'GET' -and $route -eq '/api/rules') {
+                    $inventory = Get-InventoryData -IncludeSystem:$IncludeSystem
                     $allRules = Import-AllRuleSheets -Path $Path
+                    Prime-RuleIconCacheFromReport -Inventory $inventory -AllRules $allRules -IncludeSystem $IncludeSystem
                     $black = @(Convert-RulesForWeb -Rules @($allRules.'黑名单') -IncludeSystem $IncludeSystem)
-                    $white = @(Convert-RulesForWeb -Rules @($allRules.'白名单') -IncludeSystem $IncludeSystem)
+
+                                        $white = @(Convert-RulesForWeb -Rules @($allRules.'白名单') -IncludeSystem $IncludeSystem)
                     $pending = @(Convert-RulesForWeb -Rules @($allRules.'待定') -IncludeSystem $IncludeSystem)
-                    Write-JsonResponse -Response $response -Object @{ ok = $true; blackRules = $black; whiteRules = $white; pendingRules = $pending; canUndo = ($null -ne $script:LastUndoSnapshot) } -StatusCode 200 -Nonce $nonce
+                    Write-JsonResponse -Response $response -Object @{ ok = $true; blackRules = $black; whiteRules = $white; pendingRules = $pending; canUndo = ($null -ne $script:LastUndoSnapshot); takeoverUnlocked = $script:TakeoverUnlocked } -StatusCode 200 -Nonce $nonce
+
                 } elseif ($request.HttpMethod -eq 'GET' -and $route -eq '/') {
                     $forceRefresh = $request.QueryString['refresh'] -eq '1'
                     $inventory = Get-InventoryData -ForceRefresh:$forceRefresh -IncludeSystem:$IncludeSystem
@@ -1251,8 +1708,67 @@ function Start-ReportServer {
                     Write-ResponseBytes -Response $response -Bytes ([byte[]]@()) -ContentType 'image/x-icon' -StatusCode 204 -Nonce $nonce
                 } elseif ($request.HttpMethod -eq 'POST') {
                     Assert-AuthorizedPostRequest -Request $request -CsrfToken $csrfToken
-                    $data = Read-JsonRequestBody -Request $request
-                    if ($route -eq '/api/manage/undo') {
+                                        $data = Read-JsonRequestBody -Request $request
+                    if ($route -eq '/api/manage/password') {
+                        Set-TakeoverPasswords -Data $data
+                        Write-JsonResponse -Response $response -Object @{ ok = $true } -StatusCode 200 -Nonce $nonce
+                    } elseif ($route -eq '/api/manage/takeover') {
+                        $settings = Read-TakeoverSettings
+                        if ($null -eq $settings) { throw '尚未设置接管密码，请先点击“设置接管密码”。' }
+                        $password = Get-LimitedText -Value $data.password -FieldName '使用密码' -MaximumLength 256 -Required
+                        if (-not (Test-PasswordRecord -Password $password -Record $settings.usage)) { throw '使用密码不正确。' }
+                        $script:TakeoverUnlocked = $true
+                        Write-JsonResponse -Response $response -Object @{ ok = $true; unlocked = $true } -StatusCode 200 -Nonce $nonce
+                    } elseif ($route -eq '/api/manage/saveMetadata') {
+                        if (-not $script:TakeoverUnlocked) { throw '请先点击“接管记录”并输入使用密码。' }
+                        $sheet = Assert-AllowedSheet -SheetName $data.originalSheet
+                        $id = Get-LimitedText -Value $data.id -FieldName '规则ID' -MaximumLength 10 -Required
+                        $addedBy = Get-LimitedText -Value $data.addedBy -FieldName '添加人' -MaximumLength 128 -Required
+                        $addedTime = Get-LimitedText -Value $data.addedTime -FieldName '添加时间' -MaximumLength 128
+                        if ([string]::IsNullOrWhiteSpace($addedTime)) { $addedTime = Get-Date -Format 'yyyy-MM-dd HH:mm' }
+                        $operation = {
+                            param($package)
+                            Set-RuleMetadataByIdInPackage -Package $package -SheetName $sheet -RuleId $id -AddedBy $addedBy -AddedTime $addedTime
+                        }
+                        $null = Invoke-WorkbookTransaction -Path $Path -Operation $operation -CreateUndo
+                        Write-JsonResponse -Response $response -Object @{ ok = $true; canUndo = $true; addedBy = $addedBy; addedTime = $addedTime } -StatusCode 200 -Nonce $nonce
+                    } elseif ($route -eq '/api/manage/batchMove') {
+                        $sourceSheet = Assert-AllowedSheet -SheetName $data.sourceSheet
+                        $targetSheet = Assert-AllowedSheet -SheetName $data.targetSheet
+                        if ($sourceSheet -eq $targetSheet) { throw '目标清单与当前清单相同，无需移动。' }
+                        $rawItems = @($data.items)
+                        if ($rawItems.Count -lt 1 -or $rawItems.Count -gt 500) { throw '批量处理必须包含 1 到 500 项。' }
+                        $ruleIds = @()
+                        $seenRuleIds = @{}
+                        foreach ($rawItem in $rawItems) {
+                            $ruleId = Get-LimitedText -Value $rawItem.id -FieldName '规则ID' -MaximumLength 10 -Required
+                            if ($ruleId -notmatch '^\d{1,10}$') { throw '规则 ID 无效。' }
+                            if ($seenRuleIds.ContainsKey($ruleId)) { throw '批量请求包含重复规则。' }
+                            $seenRuleIds[$ruleId] = $true
+                            $ruleIds += $ruleId
+                        }
+                        $operation = {
+                            param($package)
+                            $moveEntries = @()
+                            $identitySet = @{}
+                            foreach ($ruleId in $ruleIds) {
+                                $rule = Get-RuleByIdFromPackage -Package $package -SheetName $sourceSheet -RuleId $ruleId
+                                $identity = Get-RuleIdentity -ItemType $rule.类型 -ExtensionId $rule.插件ID -NamePattern $rule.软件名关键词
+                                if ($identitySet.ContainsKey($identity)) { throw "批量请求包含重复对象：$identity" }
+                                $identitySet[$identity] = $true
+                                $moveEntries += [PSCustomObject]@{ Rule = $rule; Identity = $identity }
+                            }
+                            Remove-IdentitiesFromPackage -Package $package -IdentitySet $identitySet
+                            $appendState = Get-WorksheetAppendState -Package $package -SheetName $targetSheet
+                            foreach ($entry in $moveEntries) {
+                                $null = Add-RuleToPackageWithState -State $appendState -Rule $entry.Rule
+                            }
+                            return $moveEntries.Count
+                        }
+                        $count = Invoke-WorkbookTransaction -Path $Path -Operation $operation -CreateUndo
+                        Write-JsonResponse -Response $response -Object @{ ok = $true; successCount = $count; canUndo = $true } -StatusCode 200 -Nonce $nonce
+                    } elseif ($route -eq '/api/manage/undo') {
+
                         Restore-UndoSnapshot -Path $Path
                         Write-JsonResponse -Response $response -Object @{ ok = $true; canUndo = $false } -StatusCode 200 -Nonce $nonce
                     } elseif ($route -eq '/api/manage/delete') {
@@ -1279,17 +1795,30 @@ function Start-ReportServer {
                         $seenIdentities = @{}
                         foreach ($item in $items) {
                             $target = Get-TargetSheetFromStatus -Status $item.status
-                            $item | Add-Member -NotePropertyName type -NotePropertyValue $item.itemType -Force
+                                                        $item | Add-Member -NotePropertyName type -NotePropertyValue $item.itemType -Force
                             $rule = Convert-InputToRule -Data $item -TargetSheet $target
                             $identity = Get-RuleIdentity -ItemType $rule.类型 -ExtensionId $rule.插件ID -NamePattern $rule.软件名关键词
                             if ($seenIdentities.ContainsKey($identity)) { throw "批量请求中存在重复对象：$identity" }
                             $seenIdentities[$identity] = $true
-                            $validated += [PSCustomObject]@{ Target = $target; Rule = $rule; Identity = $identity }
+                            $hasMetadataInput = ($item.metadataEdit -eq $true)
+                            $validated += [PSCustomObject]@{ Target = $target; Rule = $rule; Identity = $identity; OriginalSheet = [string]$item.matchedSheet; OriginalId = [string]$item.matchedRuleId; HasMetadataInput = $hasMetadataInput }
+
                         }
-                        $operation = {
+                                                $operation = {
                             param($package)
+                            foreach ($entry in $validated) {
+                                if (-not [string]::IsNullOrWhiteSpace($entry.OriginalId)) {
+                                    $null = Assert-AllowedSheet -SheetName $entry.OriginalSheet
+                                    $metadata = Get-RuleMetadataByIdFromPackage -Package $package -SheetName $entry.OriginalSheet -RuleId $entry.OriginalId
+                                    if (-not $script:TakeoverUnlocked -or -not $entry.HasMetadataInput) {
+                                        $entry.Rule.添加人 = $metadata.添加人
+                                        $entry.Rule.添加时间 = $metadata.添加时间
+                                    }
+                                }
+                            }
                             Remove-IdentitiesFromPackage -Package $package -IdentitySet $seenIdentities
                             $appendStates = @{}
+
                             foreach ($entry in $validated) {
                                 if (-not $appendStates.ContainsKey($entry.Target)) {
                                     $appendStates[$entry.Target] = Get-WorksheetAppendState -Package $package -SheetName $entry.Target
@@ -1348,11 +1877,15 @@ try {
     if (-not (Test-Path -LiteralPath $ListPath -PathType Leaf)) {
         if (-not (Test-Path -LiteralPath $templatePath -PathType Leaf)) { throw '找不到 list_template.xlsx。' }
         Ensure-WorkbookCompatibility -Path $templatePath
+        Ensure-CanonicalWorkbookSchema -Path $templatePath
         Assert-WorkbookPathSchema -Path $templatePath
         Copy-Item -LiteralPath $templatePath -Destination $ListPath -ErrorAction Stop
         Write-Host "已从空白模板创建清单：$ListPath" -ForegroundColor Yellow
     }
     Ensure-WorkbookCompatibility -Path $ListPath
+    Ensure-CanonicalWorkbookSchema -Path $ListPath
+    $clearedSystemNotes = Clear-SystemGeneratedRuleNotes -Path $ListPath
+    if ($clearedSystemNotes -gt 0) { Write-Host "已清理系统生成的备注/原因：$clearedSystemNotes 条" -ForegroundColor Yellow }
     Assert-WorkbookPathSchema -Path $ListPath
     Show-RuleConflictWarnings -Path $ListPath
     Start-ReportServer -RequestedPort $Port -Path $ListPath -IncludeSystem $IncludeSystemComponents.IsPresent

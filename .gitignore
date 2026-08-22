@@ -1,12 +1,18 @@
-# User data
+# CheckSentry local-only runtime data
+CheckSentry.settings.json
 list.xlsx
-list.xlsx.*
 
-# Backups
-list_template.xlsx.before_*
-*.backup_*
-*.before_pending_*
+# macOS / Windows local metadata
+.DS_Store
+Thumbs.db
 
-# Temporary files
-*.tmp.xlsx
-*.extracted.js
+# Temporary workbook and password files
+*.tmp
+*.schema.xlsx
+*.undo.xlsx
+*.password.json
+
+# PowerShell/editor temporary files
+*.swp
+*.swo
+*~

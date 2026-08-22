@@ -197,7 +197,6 @@ async function submitRule(evt) {
     namePattern: form.namePattern.value,
     version: form.version.value,
     publisher: form.publisher.value,
-    category: form.category.value,
     note: form.note.value,
     status: status,
     itemType: form.itemType ? form.itemType.value : '软件',
@@ -269,7 +268,7 @@ async function copySelectedRows() {
     return;
   }
 
-  const header = ['id', '类型', '插件ID', '匹配方式', '软件名关键词', '版本号', '发布者', '状态', '分类', '备注', '添加人', '添加时间'];
+  const header = ['id', '类型', '插件ID', '匹配方式', '软件名关键词', '版本号', '发布者', '状态/分类', '备注/原因', '添加人', '添加时间'];
   const rows = [header.join('\t')];
   checked.forEach(chk => {
     const form = chk.closest('tr').querySelector('form');
@@ -284,11 +283,11 @@ async function copySelectedRows() {
       form.namePattern ? form.namePattern.value : '',
       form.version ? form.version.value : '',
       form.publisher ? form.publisher.value : '',
-      status,
-      form.category ? form.category.value : '',
+            status,
       form.note ? form.note.value : '',
       '',
       new Date().toISOString().slice(0, 16).replace('T', ' ')
+
     ];
     rows.push(values.map(toClipboardCell).join('\t'));
   });
@@ -333,9 +332,9 @@ async function submitBatch(status) {
         matchType: form.matchType.value,
         namePattern: form.namePattern.value,
         version: form.version.value,
-        publisher: form.publisher.value,
-        category: form.category.value,
+                publisher: form.publisher.value,
         note: form.note.value,
+
         status: status,
         itemType: form.itemType ? form.itemType.value : '软件',
         extId: form.extId ? form.extId.value : '',
