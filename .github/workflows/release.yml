@@ -75,7 +75,10 @@ jobs:
               [ref]$errors
             )
             if ($errors.Count -gt 0) {
-              throw "$path failed Windows PowerShell 5.1 parsing: $($errors.Message -join '; ')"
+              $details = @($errors | ForEach-Object {
+                "line $($_.Extent.StartLineNumber), column $($_.Extent.StartColumnNumber), text '$($_.Extent.Text)': $($_.Message)"
+              })
+              throw "$path failed Windows PowerShell 5.1 parsing: $($details -join '; ')"
             }
             $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $path))
             if ($bytes.Length -lt 4 -or $bytes[0] -ne 0xEF -or $bytes[1] -ne 0xBB -or $bytes[2] -ne 0xBF) {
@@ -99,7 +102,10 @@ jobs:
               [ref]$errors
             )
             if ($errors.Count -gt 0) {
-              throw "$path failed PowerShell 7 parsing: $($errors.Message -join '; ')"
+              $details = @($errors | ForEach-Object {
+                "line $($_.Extent.StartLineNumber), column $($_.Extent.StartColumnNumber), text '$($_.Extent.Text)': $($_.Message)"
+              })
+              throw "$path failed PowerShell 7 parsing: $($details -join '; ')"
             }
           }
 
