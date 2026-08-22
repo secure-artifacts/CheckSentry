@@ -1,0 +1,401 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="checksentry-token" content="__CSRF_TOKEN__">
+<title>软件清单核对报告</title>
+<style>
+  :root {
+    --red: #c0392b; --red-bg: #fdecea;
+    --yellow: #b7791f; --yellow-bg: #fff8e1;
+    --pending: #2c5282; --pending-bg: #ebf4ff;
+    --green: #2f855a; --green-bg: #f0fff4;
+    --border: #e2e2e2;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Microsoft YaHei", "Segoe UI", Arial, sans-serif;
+    margin: 0; padding: 24px 32px 64px;
+    background: #fafafa; color: #222;
+  }
+  h1 { font-size: 22px; margin-bottom: 8px; }
+  h2 { font-size: 17px; margin: 0; }
+  .section-container { margin: 0 0 14px; }
+  .section-title, .green-section > summary { display: flex; align-items: center; gap: 12px; min-height: 28px; margin: 14px 0 6px; padding: 0; }
+  .section-title { cursor: default; }
+  .section-select { display: inline-flex; align-items: center; gap: 4px; color: #333; font-size: 13px; font-weight: normal; white-space: nowrap; cursor: pointer; }
+  .section-select input { margin: 0; }
+  .sec-red { color: var(--red); }
+  .sec-yellow { color: var(--yellow); }
+  .sec-pending { color: var(--pending); }
+  .sec-green { color: var(--green); }
+  .summary {
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+    background: #fff; border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 16px; margin-bottom: 8px; font-size: 13px;
+  }
+  .tag { padding: 3px 10px; border-radius: 12px; background: #eee; }
+  .tag-red { background: var(--red-bg); color: var(--red); font-weight: bold; }
+  .tag-yellow { background: var(--yellow-bg); color: var(--yellow); font-weight: bold; }
+  .tag-pending { background: var(--pending-bg); color: var(--pending); font-weight: bold; }
+  .tag-green { background: var(--green-bg); color: var(--green); font-weight: bold; }
+  .summary button {
+    margin-left: auto; padding: 6px 14px; border: 1px solid #ccc; border-radius: 6px;
+    background: #fff; cursor: pointer;
+  }
+  .summary button:hover { background: #f2f2f2; }
+  table {
+    width: 100%; table-layout: fixed; border-collapse: collapse; background: #fff;
+    border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+    font-size: 13.5px;
+  }
+  table th:nth-child(1), table td:nth-child(1) { width: 2.5%; }
+  table th:nth-child(2), table td:nth-child(2) { width: 38%; }
+  table th:nth-child(3), table td:nth-child(3) { width: 9%; }
+  table th:nth-child(4), table td:nth-child(4) { width: 11%; }
+  table th:nth-child(5), table td:nth-child(5) { width: 7%; }
+  table th:nth-child(6), table td:nth-child(6) { width: 14%; }
+  table th:nth-child(7), table td:nth-child(7) { width: 18.5%; }
+  th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { background: #f4f4f4; font-weight: 600; }
+  tr.row-red { background: var(--red-bg); }
+  tr.row-red td:nth-child(5) { color: var(--red); font-weight: bold; }
+  tr.row-banned td:nth-child(5) { color: #8e1f11; }
+  tr.row-red td.reason { color: #8e1f11; font-weight: 700; }
+  tr.row-yellow { background: var(--yellow-bg); }
+  tr.row-yellow td:nth-child(5) { color: var(--yellow); font-weight: bold; }
+  tr.row-pending { background: var(--pending-bg); }
+  tr.row-pending td:nth-child(5) { color: var(--pending); font-weight: bold; }
+  tr.row-pending td.reason { color: #1f4f82; font-weight: 600; }
+  tr.row-yellow td.reason { color: #8a5a00; font-weight: 600; }
+  tr.row-green td:nth-child(5) { color: var(--green); }
+  tr.row-green td.reason { color: #276749; }
+  td.reason { color: #444; font-size: 12.5px; max-width: 320px; overflow-wrap: anywhere; word-break: break-word; }
+  .empty { color: #999; font-style: italic; }
+
+  details summary {
+    cursor: pointer; color: #2c5282; font-size: 13px; user-select: none;
+  }
+  details { max-width: 100%; }
+  details form {
+    margin-top: 8px; display: flex; flex-direction: column; gap: 6px;
+    background: #fbfbfb; border: 1px dashed #ccc; border-radius: 6px; padding: 10px;
+    width: 100%; min-width: 0; max-width: 360px;
+  }
+  details form label { font-size: 12px; color: #555; display: flex; flex-direction: column; gap: 2px; }
+  details form input, details form select {
+    font-size: 13px; padding: 4px 6px; border: 1px solid #ccc; border-radius: 4px;
+  }
+  details form label input[type=text] + button {
+    margin-top: 4px; font-size: 11px; padding: 2px 6px; align-self: flex-start;
+    border: 1px solid #ccc; border-radius: 4px; background: #fff; cursor: pointer;
+  }
+  .btnrow { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+  .btnrow button {
+    flex: 1; padding: 6px 8px; border: none; border-radius: 4px; color: #fff;
+    cursor: pointer; font-size: 12px; white-space: nowrap;
+  }
+  .btn-approve { background: var(--green); }
+  .btn-ban { background: var(--red); }
+  .btn-pending { background: var(--pending); }
+  .btnrow button:hover { opacity: 0.85; }
+
+  .green-section { background: var(--green-bg); border: none; border-radius: 0; padding: 0 0 12px; }
+  .green-section > summary { list-style: none; cursor: pointer; }
+  .green-section > summary::-webkit-details-marker { display: none; }
+  .green-section > summary::before { content: none; }
+  .green-section table, .green-section tbody tr { background: var(--green-bg); }
+  .toast {
+    position: fixed; bottom: 20px; right: 20px; background: #333; color: #fff;
+    padding: 10px 18px; border-radius: 6px; font-size: 13px; opacity: 0; transition: opacity .2s;
+    z-index: 1000;
+  }
+  .toast.show { opacity: 1; }
+  .batch-actions {
+    display: flex; gap: 10px; margin-bottom: 16px; align-items: center;
+    background: #fff; border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 16px; font-size: 13px;
+  }
+  .batch-actions button {
+    padding: 6px 14px; border: none; border-radius: 6px; color: #fff;
+    cursor: pointer; font-size: 13px; font-weight: 500;
+  }
+  .batch-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .chk-cell { width: 30px; text-align: center; }
+  .item-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .item-icon { width: 40px; height: 40px; flex: 0 0 40px; object-fit: contain; vertical-align: middle; border-radius: 6px; background: #fff; }
+  .type-fallback { display: inline-flex; width: 40px; height: 40px; flex: 0 0 40px; align-items: center; justify-content: center; text-align: center; vertical-align: middle; font-size: 24px; }
+  .hidden { display: none; }
+  .item-main { min-width: 0; flex: 1; }
+  .item-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .item-name { vertical-align: middle; font-weight: 500; }
+  .item-location { display: block; color: #666; font-size: 11px; white-space: normal; overflow-wrap: anywhere; word-break: break-word; margin-top: 3px; }
+</style>
+</head>
+<body>
+  <h1>软件清单核对报告</h1>
+  __SUMMARY__
+  
+  <div class="batch-actions" style="position: sticky; top: 0; z-index: 99; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
+    <span style="color: #666; font-weight: bold;">已勾选 <span id="batchCountText" style="color: #2c5282;">0</span> 项：</span>
+    <button type="button" class="btn-approve" data-batch-status="允许" id="btnBatchApprove">加入白名单</button>
+    <button type="button" class="btn-ban" data-batch-status="禁止" id="btnBatchBan">加入黑名单</button>
+    <button type="button" class="btn-pending" data-batch-status="待定" id="btnBatchPending">标记待定</button>
+    <button type="button" id="btnCopySelected" style="background:#000;color:#fff;">复制已选</button>
+  </div>
+
+  __BODY__
+
+  <div class="toast" id="toast"></div>
+
+<script nonce="__CSP_NONCE__">
+const csrfToken = document.querySelector('meta[name="checksentry-token"]').content;
+
+async function apiPost(url, payload) {
+  return fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-CheckSentry-Token': csrfToken
+    },
+    body: JSON.stringify(payload)
+  });
+}
+
+function openManagementPage(evt) {
+  if (evt) {
+    evt.preventDefault();
+    evt.stopPropagation();
+  }
+  const manageUrl = window.location.origin + '/manage';
+  const newWindow = window.open(manageUrl, '_blank', 'noopener,noreferrer');
+  if (newWindow) {
+    try { newWindow.opener = null; } catch (ignore) {}
+  } else {
+    showToast('浏览器阻止了新标签页，请允许本站弹出窗口后重试', true);
+  }
+}
+
+function showToast(msg, isError) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.background = isError ? '#c0392b' : '#333';
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 1600);
+}
+
+async function submitRule(evt) {
+  evt.preventDefault();
+  const form = evt.target;
+  const clicker = evt.submitter;
+  const status = clicker ? clicker.getAttribute('data-status') : (form.dataset.pendingStatus || '待定');
+
+  const payload = {
+    matchType: form.matchType.value,
+    namePattern: form.namePattern.value,
+    version: form.version.value,
+    publisher: form.publisher.value,
+    category: form.category.value,
+    note: form.note.value,
+    status: status,
+    itemType: form.itemType ? form.itemType.value : '软件',
+    extId: form.extId ? form.extId.value : '',
+    matchedSheet: form.matchedSheet ? form.matchedSheet.value : '',
+    matchedRuleId: form.matchedRuleId ? form.matchedRuleId.value : ''
+  };
+
+  if (clicker) clicker.disabled = true;
+  try {
+    const res = await apiPost('/api/add', payload);
+    const data = await res.json();
+    if (data.ok) {
+      showToast('已写入清单，正在刷新…', false);
+      setTimeout(() => location.reload(), 700);
+    } else {
+      showToast('保存失败：' + (data.error || '未知错误'), true);
+      if (clicker) clicker.disabled = false;
+    }
+  } catch (e) {
+    showToast('请求失败：' + e.message + '（Excel是否正打开着？）', true);
+    if (clicker) clicker.disabled = false;
+  }
+  return false;
+}
+
+function updateBatchCount() {
+  const count = document.querySelectorAll('input.row-chk:checked').length;
+  document.getElementById('batchCountText').textContent = count;
+  
+  // 更新各个区域的“全选本区”复选框状态
+  document.querySelectorAll('input.section-chk').forEach(secChk => {
+    const table = secChk.closest('div.section-container').querySelector('table');
+    if (table) {
+      const allRowChks = table.querySelectorAll('input.row-chk');
+      const checkedRowChks = table.querySelectorAll('input.row-chk:checked');
+      secChk.checked = (allRowChks.length > 0 && allRowChks.length === checkedRowChks.length);
+    }
+  });
+}
+
+function toggleSection(source) {
+  const container = source.closest('div.section-container');
+  if (container) {
+    const checkboxes = container.querySelectorAll('input.row-chk');
+    for (let i = 0; i < checkboxes.length; i++) {
+      checkboxes[i].checked = source.checked;
+    }
+    updateBatchCount();
+  }
+}
+
+document.addEventListener('change', function(e) {
+  if (e.target && e.target.classList.contains('row-chk')) {
+    updateBatchCount();
+  }
+});
+
+function toClipboardCell(value) {
+  let text = String(value == null ? '' : value).replace(/[\t\r\n]+/g, ' ');
+  if (/^[=+\-@]/.test(text)) text = "'" + text;
+  return text;
+}
+
+async function copySelectedRows() {
+  const checked = document.querySelectorAll('input.row-chk:checked');
+  if (checked.length === 0) {
+    showToast('请先勾选要复制的项', true);
+    return;
+  }
+
+  const header = ['id', '类型', '插件ID', '匹配方式', '软件名关键词', '版本号', '发布者', '状态', '分类', '备注', '添加人', '添加时间'];
+  const rows = [header.join('\t')];
+  checked.forEach(chk => {
+    const form = chk.closest('tr').querySelector('form');
+    if (!form) return;
+    const status = '待定';
+    const itemType = form.itemType ? form.itemType.value : '软件';
+    const values = [
+      '',
+      itemType,
+      form.extId ? form.extId.value : '',
+      form.matchType ? form.matchType.value : (itemType === '软件' ? '精确' : '插件ID精确'),
+      form.namePattern ? form.namePattern.value : '',
+      form.version ? form.version.value : '',
+      form.publisher ? form.publisher.value : '',
+      status,
+      form.category ? form.category.value : '',
+      form.note ? form.note.value : '',
+      '',
+      new Date().toISOString().slice(0, 16).replace('T', ' ')
+    ];
+    rows.push(values.map(toClipboardCell).join('\t'));
+  });
+
+  const text = rows.join('\r\n');
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const area = document.createElement('textarea');
+      area.value = text;
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.focus();
+      area.select();
+      document.execCommand('copy');
+      area.remove();
+    }
+    showToast('已复制，可直接粘贴到 Excel 或 Google Sheets', false);
+  } catch (e) {
+    showToast('复制失败：' + e.message, true);
+  }
+}
+
+async function submitBatch(status) {
+  const checked = document.querySelectorAll('input.row-chk:checked');
+  if (checked.length === 0) {
+    showToast('请先勾选要操作的项', true);
+    return;
+  }
+  
+  if (!confirm(`确定要将选中的 ${checked.length} 项批量设为 [${status}] 吗？`)) {
+    return;
+  }
+  
+  const payloadList = [];
+  checked.forEach(chk => {
+    const form = chk.closest('tr').querySelector('form');
+    if (form) {
+      payloadList.push({
+        matchType: form.matchType.value,
+        namePattern: form.namePattern.value,
+        version: form.version.value,
+        publisher: form.publisher.value,
+        category: form.category.value,
+        note: form.note.value,
+        status: status,
+        itemType: form.itemType ? form.itemType.value : '软件',
+        extId: form.extId ? form.extId.value : '',
+        matchedSheet: form.matchedSheet ? form.matchedSheet.value : '',
+        matchedRuleId: form.matchedRuleId ? form.matchedRuleId.value : ''
+      });
+    }
+  });
+  
+  if (payloadList.length === 0) return;
+  
+  const buttons = document.querySelectorAll('.batch-actions button');
+  buttons.forEach(b => b.disabled = true);
+  showToast('正在批量处理，请稍候...', false);
+  
+  try {
+    const res = await apiPost('/api/addBatch', payloadList);
+    const data = await res.json();
+    if (data.ok) {
+      showToast(`批量处理成功：成功 ${data.successCount} 项`, false);
+      setTimeout(() => location.reload(), 1000);
+    } else {
+      showToast('批量保存部分失败：' + (data.error || '未知错误'), true);
+      buttons.forEach(b => b.disabled = false);
+    }
+  } catch (e) {
+    showToast('请求失败：' + e.message + '（Excel是否正打开着？）', true);
+    buttons.forEach(b => b.disabled = false);
+  }
+}
+
+document.getElementById('btnCopySelected').addEventListener('click', copySelectedRows);
+document.querySelectorAll('[data-batch-status]').forEach(button => {
+  button.addEventListener('click', () => submitBatch(button.dataset.batchStatus));
+});
+document.querySelectorAll('form.rule-action-form').forEach(form => {
+  form.addEventListener('submit', submitRule);
+  form.querySelectorAll('button[data-status]').forEach(button => {
+    button.addEventListener('click', () => { form.dataset.pendingStatus = button.dataset.status; });
+  });
+});
+document.querySelectorAll('.use-current-version').forEach(button => {
+  button.addEventListener('click', () => {
+    const input = button.parentElement.querySelector('input[name="version"]');
+    if (input) input.value = button.dataset.currentVersion || '';
+  });
+});
+document.querySelectorAll('input.section-chk').forEach(input => input.addEventListener('change', () => toggleSection(input)));
+document.querySelectorAll('.green-select').forEach(label => label.addEventListener('click', event => event.stopPropagation()));
+document.querySelectorAll('img.item-icon').forEach(img => {
+  img.addEventListener('error', () => {
+    img.classList.add('hidden');
+    const fallback = img.nextElementSibling;
+    if (fallback) fallback.classList.remove('hidden');
+  });
+});
+const managementButton = document.getElementById('openManagementButton');
+if (managementButton) managementButton.addEventListener('click', openManagementPage);
+const reloadButton = document.getElementById('reloadButton');
+if (reloadButton) reloadButton.addEventListener('click', () => location.reload());
+updateBatchCount();
+</script>
+</body>
+</html>
