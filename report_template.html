@@ -41,23 +41,27 @@
   .tag-pending { background: var(--pending-bg); color: var(--pending); font-weight: bold; }
   .tag-green { background: var(--green-bg); color: var(--green); font-weight: bold; }
   .summary button {
-    margin-left: auto; padding: 6px 14px; border: 1px solid #ccc; border-radius: 6px;
-    background: #fff; cursor: pointer;
+    padding: 6px 14px; border: none; border-radius: 6px;
+    color: #fff; cursor: pointer; font-size: 13px; font-weight: 500;
   }
-  .summary button:hover { background: #f2f2f2; }
+  .summary button:hover { opacity: 0.9; }
+  .summary button#openManagementButton { background: #2c5282; margin-left: auto; }
+  .summary button#cloudSettingsButton { background: #805ad5; }
+  .summary button#cloudSyncButton { background: #2b6cb0; }
+  .summary button#reloadButton { background: #4a5568; }
   table {
     width: 100%; table-layout: fixed; border-collapse: collapse; background: #fff;
-    border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+    border: 1px solid var(--border); border-radius: 8px;
     font-size: 13.5px;
   }
-  table th:nth-child(1), table td:nth-child(1) { width: 2.5%; }
-  table th:nth-child(2), table td:nth-child(2) { width: 38%; }
+  table th:nth-child(1), table td:nth-child(1) { width: 3%; }
+  table th:nth-child(2), table td:nth-child(2) { width: 44%; }
   table th:nth-child(3), table td:nth-child(3) { width: 9%; }
-  table th:nth-child(4), table td:nth-child(4) { width: 11%; }
+  table th:nth-child(4), table td:nth-child(4) { width: 10%; }
   table th:nth-child(5), table td:nth-child(5) { width: 7%; }
-  table th:nth-child(6), table td:nth-child(6) { width: 14%; }
-  table th:nth-child(7), table td:nth-child(7) { width: 18.5%; }
-  th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
+  table th:nth-child(6), table td:nth-child(6) { width: 12%; }
+  table th:nth-child(7), table td:nth-child(7) { width: 15%; }
+  th, td { padding: 6px 12px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: middle; height: 48px; }
   th { background: #f4f4f4; font-weight: 600; }
   tr.row-red { background: var(--red-bg); }
   tr.row-red td:nth-child(5) { color: var(--red); font-weight: bold; }
@@ -71,8 +75,35 @@
   tr.row-yellow td.reason { color: #8a5a00; font-weight: 600; }
   tr.row-green td:nth-child(5) { color: var(--green); }
   tr.row-green td.reason { color: #276749; }
-  td.reason { color: #444; font-size: 12.5px; max-width: 320px; overflow-wrap: anywhere; word-break: break-word; }
+  td.reason { color: #444; font-size: 12.5px; max-width: 250px; overflow-wrap: anywhere; word-break: break-word; }
+  .truncate-hover {
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis;
+    max-width: 250px; cursor: pointer; max-height: 38px; line-height: 1.3;
+  }
   .empty { color: #999; font-style: italic; }
+  
+  .modal-overlay {
+    display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.5); align-items: center; justify-content: center; z-index: 2000;
+  }
+  .modal {
+    background: #fff; border-radius: 8px; padding: 20px; width: 500px;
+    max-width: 90%; box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  }
+  .modal h2 { margin: 0 0 16px; font-size: 18px; }
+  .modal-help { font-size: 12.5px; color: #666; margin-bottom: 16px; line-height: 1.5; }
+  .form-group { margin-bottom: 14px; }
+  .form-group label { display: block; margin-bottom: 6px; font-size: 13px; font-weight: 500; }
+  .form-group input, .form-group select {
+    width: 100%; padding: 8px 10px; border: 1px solid #ccc; border-radius: 4px;
+    font-size: 14px; box-sizing: border-box;
+  }
+  .modal-btns { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+  .modal-btns button { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 13.5px; }
+  .btn-cancel { background: #eee; color: #333; }
+  .btn-cancel:hover { background: #e0e0e0; }
+  .btn-save { background: #2c5282; color: #fff; }
+  .btn-save:hover { background: #1a365d; }
 
   details summary {
     cursor: pointer; color: #2c5282; font-size: 13px; user-select: none;
@@ -123,20 +154,29 @@
   }
   .batch-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
   .chk-cell { width: 30px; text-align: center; }
-  .item-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
-  .item-icon { width: 40px; height: 40px; flex: 0 0 40px; object-fit: contain; vertical-align: middle; border-radius: 6px; background: #fff; }
-  .type-fallback { display: inline-flex; width: 40px; height: 40px; flex: 0 0 40px; align-items: center; justify-content: center; text-align: center; vertical-align: middle; font-size: 24px; }
+  /* 将 flex 容器放在 td 内部，而不是让 td 变成 flex，确保 table 宽度分配正常 */
+  .item-cell-wrapper { display: flex; align-items: center; gap: 8px; min-width: 0; width: 100%; }
+  .item-icon { width: 32px; height: 32px; flex: 0 0 32px; object-fit: contain; vertical-align: middle; border-radius: 4px; background: #fff; }
+  .type-fallback { display: inline-flex; width: 32px; height: 32px; flex: 0 0 32px; align-items: center; justify-content: center; text-align: center; vertical-align: middle; font-size: 20px; }
   .hidden { display: none; }
+  /* 移除 overflow: hidden 避免裁剪上方弹出的悬浮窗 */
   .item-main { min-width: 0; flex: 1; }
-  .item-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .item-name { vertical-align: middle; font-weight: 500; }
-  .item-location { display: block; color: #666; font-size: 11px; white-space: normal; overflow-wrap: anywhere; word-break: break-word; margin-top: 3px; }
+  .item-title { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; width: 100%; min-width: 0; }
+  .item-name { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-weight: 500; overflow: hidden; text-overflow: ellipsis; max-height: 38px; line-height: 1.3; }
+  .tooltip-wrapper { position: relative; display: block; width: 100%; min-width: 0; }
+  .item-location { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; color: #666; font-size: 11px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; cursor: pointer; max-height: 28px; line-height: 1.2; }
+  /* 修改定位：让浮层出现在文本正上方，稍微向下调整（margin-bottom 从 4px 改为 -2px），使其更贴近下方文字 */
+  .copyable-tooltip { display: none; position: absolute; left: -6px; bottom: 100%; margin-bottom: -2px; z-index: 9999; background: #fff; border: 1px solid #ccc; padding: 6px 10px; border-radius: 4px; box-shadow: 0 -4px 12px rgba(0,0,0,0.15); color: #333; font-size: 11px; white-space: normal; width: max-content; max-width: 400px; overflow-wrap: anywhere; word-break: break-word; cursor: auto; }
+  .copyable-tooltip.reason-tooltip { font-size: 12.5px; }
+  /* 热区向下延伸，覆盖住浮层与原文字之间的间隙，确保鼠标向上移动时不会断开 */
+  .copyable-tooltip::before { content: ''; position: absolute; top: -10px; left: -10px; right: -10px; bottom: -10px; z-index: -1; }
+  .tooltip-wrapper:hover .copyable-tooltip { display: block; }
 </style>
 </head>
 <body>
   <h1>软件清单核对报告</h1>
   __SUMMARY__
-
+  
   <div class="batch-actions" style="position: sticky; top: 0; z-index: 99; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
     <span style="color: #666; font-weight: bold;">已勾选 <span id="batchCountText" style="color: #2c5282;">0</span> 项：</span>
     <button type="button" class="btn-approve" data-batch-status="允许" id="btnBatchApprove">加入白名单</button>
@@ -147,8 +187,25 @@
 
   __BODY__
 
-  <div class="toast" id="toast"></div>
+  <div class="modal-overlay" id="cloudOverlay">
+  <div class="modal">
+    <h2>云端清单设置</h2>
+    <p class="modal-help">保存 Google Sheets 分享链接后，每次启动 CheckSentry 都会先下载云端 XLSX 规则模板，再与本地 list.xlsx 离线合并。软件和插件扫描结果不会上传。</p>
+    <form id="cloudForm">
+      <div class="form-group">
+        <label>Google Sheets 链接</label>
+        <input type="url" id="cloudUrl" maxlength="2048" placeholder="https://docs.google.com/spreadsheets/d/..." autocomplete="off" required>
+      </div>
+      <p class="modal-help">要求表格包含“白名单”“待定”“黑名单”三个工作表。同步只读取这三个工作表的 B:K 十列，忽略 A 列 ID、其他列和其他工作表；B:K 表头对应现有规则字段。云端仅作为规则来源，云端没有的本地私有规则会保留。</p>
+      <div class="modal-btns">
+        <button type="button" class="btn-cancel" id="cancelCloudButton">取消</button>
+        <button type="submit" class="btn-save">保存并同步</button>
+      </div>
+    </form>
+  </div>
+</div>
 
+<div id="toast" class="toast"></div>
 <script nonce="__CSP_NONCE__">
 const csrfToken = document.querySelector('meta[name="checksentry-token"]').content;
 
@@ -198,6 +255,7 @@ async function submitRule(evt) {
     version: form.version.value,
     publisher: form.publisher.value,
     note: form.note.value,
+    noteLink: form.noteLink ? form.noteLink.value : '',
     status: status,
     itemType: form.itemType ? form.itemType.value : '软件',
     extId: form.extId ? form.extId.value : '',
@@ -226,7 +284,7 @@ async function submitRule(evt) {
 function updateBatchCount() {
   const count = document.querySelectorAll('input.row-chk:checked').length;
   document.getElementById('batchCountText').textContent = count;
-
+  
   // 更新各个区域的“全选本区”复选框状态
   document.querySelectorAll('input.section-chk').forEach(secChk => {
     const table = secChk.closest('div.section-container').querySelector('table');
@@ -258,6 +316,9 @@ document.addEventListener('change', function(e) {
 function toClipboardCell(value) {
   let text = String(value == null ? '' : value).replace(/[\t\r\n]+/g, ' ');
   if (/^[=+\-@]/.test(text)) text = "'" + text;
+  if (text.includes(':') || text.includes('"')) {
+    text = '"' + text.replace(/"/g, '""') + '"';
+  }
   return text;
 }
 
@@ -268,8 +329,7 @@ async function copySelectedRows() {
     return;
   }
 
-  const header = ['id', '类型', '插件ID', '匹配方式', '软件名关键词', '版本号', '发布者', '状态/分类', '备注/原因', '添加人', '添加时间'];
-  const rows = [header.join('\t')];
+  const rows = [];
   checked.forEach(chk => {
     const form = chk.closest('tr').querySelector('form');
     if (!form) return;
@@ -286,7 +346,11 @@ async function copySelectedRows() {
             status,
       form.note ? form.note.value : '',
       '',
-      new Date().toISOString().slice(0, 16).replace('T', ' ')
+      (function() {
+        const d = new Date();
+        const pad = n => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      })()
 
     ];
     rows.push(values.map(toClipboardCell).join('\t'));
@@ -319,11 +383,11 @@ async function submitBatch(status) {
     showToast('请先勾选要操作的项', true);
     return;
   }
-
+  
   if (!confirm(`确定要将选中的 ${checked.length} 项批量设为 [${status}] 吗？`)) {
     return;
   }
-
+  
   const payloadList = [];
   checked.forEach(chk => {
     const form = chk.closest('tr').querySelector('form');
@@ -334,6 +398,7 @@ async function submitBatch(status) {
         version: form.version.value,
                 publisher: form.publisher.value,
         note: form.note.value,
+        noteLink: form.noteLink ? form.noteLink.value : '',
 
         status: status,
         itemType: form.itemType ? form.itemType.value : '软件',
@@ -343,13 +408,13 @@ async function submitBatch(status) {
       });
     }
   });
-
+  
   if (payloadList.length === 0) return;
-
+  
   const buttons = document.querySelectorAll('.batch-actions button');
   buttons.forEach(b => b.disabled = true);
   showToast('正在批量处理，请稍候...', false, true);
-
+  
   try {
     const res = await apiPost('/api/addBatch', payloadList);
     const data = await res.json();
@@ -393,6 +458,91 @@ document.querySelectorAll('img.item-icon').forEach(img => {
 });
 const managementButton = document.getElementById('openManagementButton');
 if (managementButton) managementButton.addEventListener('click', openManagementPage);
+
+async function loadCloudSettings() {
+  try {
+    const res = await fetch('/api/manage/cloudSettings');
+    const data = await res.json();
+    if (data.url) {
+      document.getElementById('cloudUrl').value = data.url;
+    }
+  } catch (e) {
+    console.warn('云端清单设置读取失败', e);
+  }
+}
+
+function openCloudModal() {
+  loadCloudSettings().finally(function() {
+    document.getElementById('cloudOverlay').style.display = 'flex';
+    document.getElementById('cloudUrl').focus();
+  });
+}
+
+function closeCloudModal() {
+  document.getElementById('cloudOverlay').style.display = 'none';
+}
+
+async function saveCloudSettings(evt) {
+  evt.preventDefault();
+  const button = evt.submitter;
+  if (button) button.disabled = true;
+  try {
+    const url = document.getElementById('cloudUrl').value.trim();
+    const res = await apiPost('/api/manage/cloudSettings', { url: url });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || '云端链接保存失败');
+    closeCloudModal();
+    showToast('云端清单链接已保存，正在同步...', false, true);
+    await syncCloudRules();
+  } catch (e) {
+    showToast('云端设置失败: ' + e.message, true);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function syncCloudRules() {
+  const button = document.getElementById('cloudSyncButton');
+  if (button) button.disabled = true;
+  try {
+    showToast('正在同步云端清单...', false, true);
+    const res = await apiPost('/api/manage/cloudSync', {});
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || '云端同步失败');
+    if (data.configured !== true) {
+      showToast('尚未配置云端清单，请先点击“云端清单设置”保存链接', true);
+      openCloudModal();
+      return;
+    }
+    showToast(`同步完成：更新了 ${data.count} 条规则，正在刷新...`, false);
+    setTimeout(() => { window.location.href = '/?refresh=1'; }, 1000);
+  } catch (e) {
+    showToast('云端同步失败，本地清单未改变: ' + e.message, true);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+const cloudSettingsButton = document.getElementById('cloudSettingsButton');
+if (cloudSettingsButton) {
+  cloudSettingsButton.addEventListener('click', openCloudModal);
+}
+
+const cancelCloudButton = document.getElementById('cancelCloudButton');
+if (cancelCloudButton) {
+  cancelCloudButton.addEventListener('click', closeCloudModal);
+}
+
+const cloudForm = document.getElementById('cloudForm');
+if (cloudForm) {
+  cloudForm.addEventListener('submit', saveCloudSettings);
+}
+
+const cloudSyncButton = document.getElementById('cloudSyncButton');
+if (cloudSyncButton) {
+  cloudSyncButton.addEventListener('click', syncCloudRules);
+}
+
 const reloadButton = document.getElementById('reloadButton');
 if (reloadButton) reloadButton.addEventListener('click', () => { window.location.href = '/?refresh=1'; });
 updateBatchCount();

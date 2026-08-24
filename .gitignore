@@ -1,5 +1,6 @@
 # CheckSentry local-only runtime data
 CheckSentry.settings.json
+CheckSentry.cloud.json
 list.xlsx
 
 # macOS / Windows local metadata

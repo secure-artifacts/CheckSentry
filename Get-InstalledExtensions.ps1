@@ -268,10 +268,12 @@ function Get-ChromiumExtensions {
             }
         }
         $iconItem = $items | Where-Object { -not [string]::IsNullOrWhiteSpace($_.IconPath) } | Select-Object -First 1
+        $uniqueVersions = @($items | Select-Object -ExpandProperty Version -Unique)
+        $displayVersion = if ($uniqueVersions.Count -gt 1) { $uniqueVersions -join ', ' } else { $first.Version }
         $results += [PSCustomObject]@{
             ExtensionId = $group.Name
             Name = $first.Name
-            Version = $first.Version
+            Version = $displayVersion
             Publisher = $first.Publisher
             IconPath = if ($null -ne $iconItem) { $iconItem.IconPath } else { '' }
             BrowserFamily = @($items | Select-Object -ExpandProperty BrowserFamily -Unique)
@@ -367,10 +369,12 @@ function Get-FirefoxExtensions {
         $locations = foreach ($item in $items) {
             [PSCustomObject]@{ Browser = 'Firefox'; ProfileName = $item.ProfileName; ProfilePath = $item.ProfilePath; Version = $item.Version }
         }
+        $uniqueVersions = @($items | Select-Object -ExpandProperty Version -Unique)
+        $displayVersion = if ($uniqueVersions.Count -gt 1) { $uniqueVersions -join ', ' } else { $first.Version }
         $results += [PSCustomObject]@{
             ExtensionId = $group.Name
             Name = $first.Name
-            Version = $first.Version
+            Version = $displayVersion
             Publisher = $first.Publisher
             IconPath = if ($null -ne $iconItem) { $iconItem.IconPath } else { '' }
             Active = (@($items | Where-Object { $_.Active }).Count -gt 0)

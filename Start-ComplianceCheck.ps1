@@ -78,12 +78,57 @@ function Get-RuleSheetHeaderMap {
     return $map
 }
 
-function Get-RuleSheetCellValue {
+function Get-RuleSheetCell {
     param($Worksheet, [hashtable]$HeaderMap, [int]$Row, [string[]]$Names)
     foreach ($name in $Names) {
-        if ($HeaderMap.ContainsKey($name)) { return $Worksheet.Cells[$Row, $HeaderMap[$name]].Value }
+        if ($HeaderMap.ContainsKey($name)) { return $Worksheet.Cells[$Row, $HeaderMap[$name]] }
     }
     return $null
+}
+
+function Get-RuleSheetCellValue {
+    param($Worksheet, [hashtable]$HeaderMap, [int]$Row, [string[]]$Names)
+    $cell = Get-RuleSheetCell -Worksheet $Worksheet -HeaderMap $HeaderMap -Row $Row -Names $Names
+    if ($null -eq $cell) { return $null }
+    return $cell.Value
+}
+
+function Get-SafeHttpUrl {
+    param([object]$Value)
+    $text = if ($null -eq $Value) { '' } else { ([string]$Value).Trim() }
+    if ([string]::IsNullOrWhiteSpace($text)) { return '' }
+    $parseText = $text -replace '&amp;', '&'
+    $uri = $null
+    if (-not [Uri]::TryCreate($parseText, [UriKind]::Absolute, [ref]$uri)) { return '' }
+    if (@('http', 'https') -notcontains $uri.Scheme.ToLowerInvariant()) { return '' }
+    if (-not [string]::IsNullOrWhiteSpace($uri.UserInfo)) { return '' }
+    return $uri.AbsoluteUri
+}
+
+function Get-CellHyperlinkUrl {
+    param($Cell)
+    if ($null -eq $Cell) { return '' }
+    try {
+        $hyperlink = $Cell.Hyperlink
+        if ($null -eq $hyperlink) { return '' }
+        $candidates = @()
+        if ($hyperlink -is [Uri]) {
+            $candidates += $hyperlink.AbsoluteUri
+            $candidates += $hyperlink.OriginalString
+        }
+        foreach ($propertyName in @('ExternalUri', 'Uri', 'OriginalString', 'Address', 'Url', 'Href')) {
+            $property = $hyperlink.PSObject.Properties[$propertyName]
+            if ($null -ne $property -and $null -ne $property.Value) {
+                $candidates += [string]$property.Value
+            }
+        }
+        $candidates += [string]$hyperlink
+        foreach ($candidate in $candidates) {
+            $safeUrl = Get-SafeHttpUrl -Value $candidate
+            if (-not [string]::IsNullOrWhiteSpace($safeUrl)) { return $safeUrl }
+        }
+    } catch { return '' }
+    return ''
 }
 
 function Get-UserNoteText {
@@ -120,6 +165,7 @@ function Convert-RuleSheetToCanonical {
                 发布者 = Get-RuleSheetCellValue -Worksheet $worksheet -HeaderMap $headerMap -Row $row -Names @('发布者')
                 '状态/分类' = Get-CanonicalRuleStatus -SheetName $sheet
                 '备注/原因' = $noteOrReason
+                '备注/原因链接' = Get-CellHyperlinkUrl -Cell (Get-RuleSheetCell -Worksheet $worksheet -HeaderMap $headerMap -Row $row -Names @('备注/原因', '备注', '禁止原因'))
                 添加人 = Get-RuleSheetCellValue -Worksheet $worksheet -HeaderMap $headerMap -Row $row -Names @('添加人')
                 添加时间 = Get-RuleSheetCellValue -Worksheet $worksheet -HeaderMap $headerMap -Row $row -Names @('添加时间')
             }
@@ -138,6 +184,10 @@ function Convert-RuleSheetToCanonical {
             $recordProperty = $record.PSObject.Properties[$header]
             $recordValue = if ($null -ne $recordProperty) { $recordProperty.Value } else { '' }
             $worksheet.Cells[$targetRow, $column].Value = $recordValue
+            if ($header -eq '备注/原因') {
+                $noteLink = Get-SafeHttpUrl -Value $record.'备注/原因链接'
+                if (-not [string]::IsNullOrWhiteSpace($noteLink)) { $worksheet.Cells[$targetRow, $column].Hyperlink = [Uri]$noteLink }
+            }
             $worksheet.Cells[$targetRow, $column].Style.Numberformat.Format = '@'
         }
         $targetRow++
@@ -354,9 +404,15 @@ function Normalize-WorkbookXmlNamespace {
                     try {
                         $utf8NoBom = New-Object -TypeName System.Text.UTF8Encoding -ArgumentList $false
                         $reader = New-Object -TypeName System.IO.StreamReader -ArgumentList @($sourceStream, $utf8NoBom, $true)
+                        $xmlText = $reader.ReadToEnd()
+                        # 强力清除带有 r: 属性的相关节点，避免 LoadXml 时报 r: is an undeclared prefix 错误
+                        $xmlText = $xmlText -replace '(?s)<hyperlinks(?:[^>]*)>.*?</hyperlinks>', ''
+                        $xmlText = $xmlText -replace '(?s)<x:hyperlinks(?:[^>]*)>.*?</x:hyperlinks>', ''
+                        $xmlText = $xmlText -replace '(?s)<legacyDrawing[^>]*r:id[^>]*>', ''
+                        $xmlText = $xmlText -replace '(?s)<drawing[^>]*r:id[^>]*>', ''
                         $document = New-Object System.Xml.XmlDocument
                         $document.PreserveWhitespace = $true
-                        $document.Load($reader)
+                        $document.LoadXml($xmlText)
                         $root = $document.DocumentElement
                         if ($null -eq $root -or $root.LocalName -ne 'worksheet') {
                             throw "工作表 XML 根节点无效：$($sourceEntry.FullName)"
@@ -459,7 +515,10 @@ function Convert-WorksheetToRules {
                 throw "工作表【$SheetName】单元格 $($cell.Address) 含公式。规则清单只允许纯文本/数值。"
             }
                         $value = $cell.Value
-            if ($headers[$column - 1] -eq '备注/原因') { $value = Get-UserNoteText $value }
+            if ($headers[$column - 1] -eq '备注/原因') {
+                $value = Get-UserNoteText $value
+                $ordered['备注/原因链接'] = Get-CellHyperlinkUrl -Cell $cell
+            }
             if ($null -ne $value -and -not [string]::IsNullOrWhiteSpace([string]$value)) { $hasValue = $true }
             $ordered[$headers[$column - 1]] = $value
 
@@ -510,6 +569,92 @@ function Import-AllRuleSheets {
         }
     }
     throw "读取规则清单失败。请确认 Excel 已关闭且文件未损坏。详细错误：$($lastError.Exception.Message)"
+}
+
+function Convert-CloudWorksheetToRules {
+    param($Worksheet, [string]$SheetName)
+    $headers = Get-ExpectedHeaders -SheetName $SheetName
+    $cloudHeaders = @($headers | Select-Object -Skip 1)
+    $rules = @()
+    if ($null -eq $Worksheet.Dimension -or $Worksheet.Dimension.End.Row -lt 1 -or $Worksheet.Dimension.End.Column -lt 11) {
+        throw "云端工作表【$SheetName】必须包含 B:K 十列表头。"
+    }
+    if ($Worksheet.Dimension.End.Row -gt 100000) { throw "云端工作表【$SheetName】超过 100000 行，已拒绝处理。" }
+    if (($Worksheet.Dimension.End.Row * 10) -gt 2000000) { throw "云端工作表【$SheetName】使用范围异常大，已拒绝处理。" }
+    for ($index = 0; $index -lt $cloudHeaders.Count; $index++) {
+        $column = $index + 2
+        $actual = [string]$Worksheet.Cells[1, $column].Text
+        if ($actual -ne $cloudHeaders[$index]) {
+            throw "云端工作表【$SheetName】第 $column 列（B:K）应为【$($cloudHeaders[$index])】，实际为【$actual】。"
+        }
+    }
+    for ($row = 1; $row -le $Worksheet.Dimension.End.Row; $row++) {
+        for ($column = 2; $column -le 11; $column++) {
+            $cell = $Worksheet.Cells[$row, $column]
+            if (-not [string]::IsNullOrWhiteSpace([string]$cell.Formula)) {
+                throw "云端工作表【$SheetName】单元格 $($cell.Address) 含公式，规则模板只允许纯文本/数值。"
+            }
+        }
+    }
+    for ($row = 2; $row -le $Worksheet.Dimension.End.Row; $row++) {
+        $hasValue = $false
+        $ordered = [ordered]@{}
+        for ($index = 0; $index -lt $cloudHeaders.Count; $index++) {
+            $column = $index + 2
+            $header = $cloudHeaders[$index]
+            $cell = $Worksheet.Cells[$row, $column]
+            $value = $cell.Value
+            if ($header -eq '备注/原因') {
+                $value = Get-UserNoteText $value
+                $ordered['备注/原因链接'] = Get-CellHyperlinkUrl -Cell $cell
+            }
+            if ($null -ne $value -and -not [string]::IsNullOrWhiteSpace([string]$value)) { $hasValue = $true }
+            $ordered[$header] = $value
+        }
+        if ($hasValue) {
+            $cloudData = [PSCustomObject]@{
+                type = [string]$ordered['类型']
+                extId = [string]$ordered['插件ID']
+                matchType = [string]$ordered['匹配方式']
+                namePattern = [string]$ordered['软件名关键词']
+                version = [string]$ordered['版本号']
+                publisher = [string]$ordered['发布者']
+                note = [string]$ordered['备注/原因']
+                noteLink = [string]$ordered['备注/原因链接']
+                addedBy = [string]$ordered['添加人']
+                addedTime = [string]$ordered['添加时间']
+            }
+            $validatedRule = Convert-InputToRule -Data $cloudData -TargetSheet $SheetName
+            $validatedRule.添加人 = [string]$ordered['添加人']
+            $validatedRule.添加时间 = [string]$ordered['添加时间']
+            $rules += $validatedRule
+        }
+    }
+    return $rules
+}
+
+function Import-CloudRuleSheets {
+    param([string]$Path)
+    $lastError = $null
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        $package = $null
+        try {
+            $package = Open-ExcelPackage -Path $Path -ErrorAction Stop
+            $result = [ordered]@{}
+            foreach ($sheetName in $script:AllowedSheets) {
+                $worksheet = $package.Workbook.Worksheets[$sheetName]
+                if ($null -eq $worksheet) { throw "云端模板缺少工作表【$sheetName】。" }
+                $result[$sheetName] = @(Convert-CloudWorksheetToRules -Worksheet $worksheet -SheetName $sheetName)
+            }
+            return [PSCustomObject]$result
+        } catch {
+            $lastError = $_
+            if ($attempt -lt 3) { Start-Sleep -Milliseconds 350 }
+        } finally {
+            if ($null -ne $package) { $package.Dispose() }
+        }
+    }
+    throw "读取云端规则模板失败。请确认三个工作表的 B:K 表头正确且文件可导出。详细错误：$($lastError.Exception.Message)"
 }
 
 function Test-ListFileAvailable {
@@ -761,6 +906,235 @@ function Set-TakeoverPasswords {
     Write-TakeoverSettings -Settings $settings
 }
 
+function Get-CloudSettingsPath {
+    return (Join-Path $PSScriptRoot 'CheckSentry.cloud.json')
+}
+
+function Read-CloudSettings {
+    $path = Get-CloudSettingsPath
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
+    try {
+        $fileInfo = Get-Item -LiteralPath $path -ErrorAction Stop
+        if ($fileInfo.Length -gt 16384) { throw '配置文件过大。' }
+        $raw = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+        if ([string]::IsNullOrWhiteSpace($raw)) { throw '配置文件为空。' }
+        $settings = $raw | ConvertFrom-Json -ErrorAction Stop
+        if ([int]$settings.version -ne 1) { throw '配置版本无效。' }
+        $null = Get-GoogleSheetsExportUrl -Url ([string]$settings.url)
+        return $settings
+    } catch { throw '云端清单配置文件无效，请在维护页重新设置云端链接。' }
+}
+
+function Write-CloudSettings {
+    param([string]$Url)
+    $exportUrl = Get-GoogleSheetsExportUrl -Url $Url
+    $path = Get-CloudSettingsPath
+    $directory = [System.IO.Path]::GetDirectoryName($path)
+    $temporaryPath = Join-Path $directory ('.CheckSentry.cloud.json.' + [guid]::NewGuid().ToString('N') + '.tmp')
+    $backupPath = $null
+    try {
+        $settings = [ordered]@{ version = 1; url = $Url.Trim() }
+        $json = $settings | ConvertTo-Json -Depth 3
+        $utf8NoBom = New-Object -TypeName System.Text.UTF8Encoding -ArgumentList @($false)
+        [System.IO.File]::WriteAllText($temporaryPath, $json, $utf8NoBom)
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            $backupPath = $path + '.' + [guid]::NewGuid().ToString('N') + '.bak'
+            try { [System.IO.File]::Replace($temporaryPath, $path, $backupPath, $true) }
+            finally { if ($backupPath -and (Test-Path -LiteralPath $backupPath -PathType Leaf)) { Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue } }
+        } else {
+            [System.IO.File]::Move($temporaryPath, $path)
+        }
+    } finally {
+        if (Test-Path -LiteralPath $temporaryPath -PathType Leaf) { Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue }
+    }
+    return $exportUrl
+}
+
+function Get-GoogleSheetsExportUrl {
+    param([string]$Url)
+    $text = if ($null -eq $Url) { '' } else { $Url.Trim() }
+    if ([string]::IsNullOrWhiteSpace($text) -or $text.Length -gt 2048) { throw 'Google Sheets 链接不能为空且不能超过 2048 个字符。' }
+    $uri = $null
+    if (-not [Uri]::TryCreate($text, [UriKind]::Absolute, [ref]$uri)) { throw 'Google Sheets 链接格式无效。' }
+    if ($uri.Scheme -ne 'https' -or $uri.Host -ne 'docs.google.com') { throw '只允许使用 https://docs.google.com/spreadsheets/d/... 链接。' }
+    $match = [regex]::Match($uri.AbsolutePath, '^/spreadsheets/d/([A-Za-z0-9_-]{10,200})(?:/|$)')
+    if (-not $match.Success) { throw '链接不是有效的 Google Sheets 表格链接。' }
+    $spreadsheetId = $match.Groups[1].Value
+    return ('https://docs.google.com/spreadsheets/d/{0}/export?format=xlsx' -f $spreadsheetId)
+}
+
+function Download-GoogleSheetsWorkbook {
+    param([string]$Url)
+    $exportUrl = Get-GoogleSheetsExportUrl -Url $Url
+    $temporaryPath = Join-Path ([System.IO.Path]::GetTempPath()) ('CheckSentry-cloud-' + [guid]::NewGuid().ToString('N') + '.xlsx')
+    $maximumBytes = [int64]10485760
+    $response = $null
+    $inputStream = $null
+    $outputStream = $null
+    $success = $false
+    try {
+        $request = [System.Net.HttpWebRequest]::Create($exportUrl)
+        $request.Method = 'GET'
+        $request.Timeout = 30000
+        $request.ReadWriteTimeout = 30000
+        $request.AllowAutoRedirect = $true
+        $request.MaximumAutomaticRedirections = 5
+        $request.UserAgent = 'CheckSentry/1.0.5'
+        $response = $request.GetResponse()
+        $effectiveUri = $response.ResponseUri
+        if ($null -eq $effectiveUri -or ($effectiveUri.Host -ne 'docs.google.com' -and -not $effectiveUri.Host.EndsWith('.googleusercontent.com', [StringComparison]::OrdinalIgnoreCase))) {
+            throw '云端下载被重定向到不受允许的主机。'
+        }
+        if ($response.ContentLength -gt $maximumBytes) { throw '云端 XLSX 文件超过 10 MB 限制。' }
+        $inputStream = $response.GetResponseStream()
+        $outputStream = [System.IO.File]::Open($temporaryPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+        $buffer = New-Object byte[] 65536
+        $totalBytes = [int64]0
+        while (($read = $inputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            $totalBytes += $read
+            if ($totalBytes -gt $maximumBytes) { throw '云端 XLSX 文件超过 10 MB 限制。' }
+            $outputStream.Write($buffer, 0, $read)
+        }
+        $outputStream.Flush()
+        if ($totalBytes -le 0) { throw '云端 XLSX 文件为空。' }
+        $outputStream.Dispose()
+        $outputStream = $null
+        $inputStream.Dispose()
+        $inputStream = $null
+        $response.Close()
+        $response = $null
+        $stream = [System.IO.File]::OpenRead($temporaryPath)
+        try {
+            $header = New-Object byte[] 2
+            $null = $stream.Read($header, 0, 2)
+        } finally { $stream.Dispose() }
+        if ($header[0] -ne 80 -or $header[1] -ne 75) { throw '云端链接没有返回有效的 XLSX 文件，可能需要登录或调整 Google Sheets 分享权限。' }
+        $success = $true
+        return $temporaryPath
+    } catch {
+        throw "下载 Google Sheets 规则模板失败：$($_.Exception.Message)"
+    } finally {
+        if ($null -ne $outputStream) { $outputStream.Dispose() }
+        if ($null -ne $inputStream) { $inputStream.Dispose() }
+        if ($null -ne $response) { $response.Close() }
+        if (-not $success -and (Test-Path -LiteralPath $temporaryPath -PathType Leaf)) {
+            Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Get-RuleDataSignature {
+    param($Rule, [string]$SheetName)
+    $data = [ordered]@{
+        sheet = $SheetName
+        类型 = [string]$Rule.'类型'
+        插件ID = [string]$Rule.'插件ID'
+        匹配方式 = [string]$Rule.'匹配方式'
+        软件名关键词 = [string]$Rule.'软件名关键词'
+        版本号 = [string]$Rule.'版本号'
+        发布者 = [string]$Rule.'发布者'
+        '备注/原因' = [string]$Rule.'备注/原因'
+        '备注/原因链接' = [string]$Rule.'备注/原因链接'
+        添加人 = [string]$Rule.'添加人'
+        添加时间 = [string]$Rule.'添加时间'
+    }
+    return ($data | ConvertTo-Json -Compress -Depth 3)
+}
+
+function Get-RuleSetFingerprint {
+    param($AllRules)
+    $signatures = @()
+    foreach ($sheetName in $script:AllowedSheets) {
+        foreach ($rule in @($AllRules.$sheetName)) { $signatures += Get-RuleDataSignature -Rule $rule -SheetName $sheetName }
+    }
+    return (($signatures | Sort-Object) -join "`n")
+}
+
+function Test-CloudRulesApplied {
+    param($CloudEntries, $LocalRules)
+    $localByKey = @{}
+    $localLocations = @{}
+    foreach ($sheetName in $script:AllowedSheets) {
+        foreach ($rule in @($LocalRules.$sheetName)) {
+            $itemType = if ([string]::IsNullOrWhiteSpace([string]$rule.'类型')) { '软件' } else { [string]$rule.'类型' }
+            $identity = Get-RuleIdentity -ItemType $itemType -ExtensionId ([string]$rule.'插件ID') -NamePattern ([string]$rule.'软件名关键词')
+            $key = $sheetName + '|' + $identity
+            if ($localByKey.ContainsKey($key)) { $localByKey[$key] = $null }
+            else { $localByKey[$key] = $rule }
+            if (-not $localLocations.ContainsKey($identity)) { $localLocations[$identity] = @() }
+            $localLocations[$identity] += $key
+        }
+    }
+    foreach ($entry in $CloudEntries) {
+        $key = $entry.Sheet + '|' + $entry.Identity
+        if (-not $localByKey.ContainsKey($key) -or $null -eq $localByKey[$key]) { return $false }
+        if ($localLocations[$entry.Identity].Count -ne 1) { return $false }
+        if ((Get-RuleDataSignature -Rule $entry.Rule -SheetName $entry.Sheet) -ne (Get-RuleDataSignature -Rule $localByKey[$key] -SheetName $entry.Sheet)) { return $false }
+    }
+    return $true
+}
+
+function Sync-CloudWorkbook {
+    param([string]$Path, [switch]$CreateUndo)
+    $settings = Read-CloudSettings
+    if ($null -eq $settings) { return [PSCustomObject]@{ Configured = $false; Changed = $false; Count = 0 } }
+    $cloudPath = $null
+    try {
+        $cloudPath = Download-GoogleSheetsWorkbook -Url ([string]$settings.url)
+        try { Normalize-WorkbookXmlNamespace -Path $cloudPath } catch { Write-Verbose "云端模板命名空间修复失败，将尝试直接读取：$($_.Exception.Message)" }
+        $cloudRules = Import-CloudRuleSheets -Path $cloudPath
+        $localRules = Import-AllRuleSheets -Path $Path
+        $localByIdentity = @{}
+        foreach ($sheetName in $script:AllowedSheets) {
+            foreach ($rule in @($localRules.$sheetName)) {
+                $itemType = if ([string]::IsNullOrWhiteSpace([string]$rule.'类型')) { '软件' } else { [string]$rule.'类型' }
+                $identity = Get-RuleIdentity -ItemType $itemType -ExtensionId ([string]$rule.'插件ID') -NamePattern ([string]$rule.'软件名关键词')
+                $localByIdentity[$identity] = [PSCustomObject]@{ Sheet = $sheetName; Rule = $rule }
+            }
+        }
+        $cloudEntries = @()
+        $identitySet = @{}
+        foreach ($sheetName in $script:AllowedSheets) {
+            foreach ($rule in @($cloudRules.$sheetName)) {
+                $identity = Get-RuleIdentity -ItemType $rule.'类型' -ExtensionId ([string]$rule.'插件ID') -NamePattern ([string]$rule.'软件名关键词')
+                if ($identitySet.ContainsKey($identity)) { throw "云端模板存在重复对象或跨表冲突：$identity" }
+                $identitySet[$identity] = $true
+                $effectiveRule = [PSCustomObject]([ordered]@{
+                    类型 = [string]$rule.'类型'
+                    插件ID = [string]$rule.'插件ID'
+                    匹配方式 = [string]$rule.'匹配方式'
+                    软件名关键词 = [string]$rule.'软件名关键词'
+                    版本号 = [string]$rule.'版本号'
+                    发布者 = [string]$rule.'发布者'
+                    '状态/分类' = Get-CanonicalRuleStatus -SheetName $sheetName
+                    '备注/原因' = [string]$rule.'备注/原因'
+                    '备注/原因链接' = [string]$rule.'备注/原因链接'
+                    添加人 = [string]$rule.'添加人'
+                    添加时间 = [string]$rule.'添加时间'
+                })
+                $cloudEntries += [PSCustomObject]@{ Sheet = $sheetName; Rule = $effectiveRule; Identity = $identity }
+            }
+        }
+        if (Test-CloudRulesApplied -CloudEntries $cloudEntries -LocalRules $localRules) {
+            return [PSCustomObject]@{ Configured = $true; Changed = $false; Count = 0 }
+        }
+        $operation = {
+            param($package)
+            Remove-IdentitiesFromPackage -Package $package -IdentitySet $identitySet
+            $states = @{}
+            foreach ($entry in $cloudEntries) {
+                if (-not $states.ContainsKey($entry.Sheet)) { $states[$entry.Sheet] = Get-WorksheetAppendState -Package $package -SheetName $entry.Sheet }
+                $null = Add-RuleToPackageWithState -State $states[$entry.Sheet] -Rule $entry.Rule
+            }
+            return $cloudEntries.Count
+        }
+        $count = Invoke-WorkbookTransaction -Path $Path -Operation $operation -CreateUndo:$CreateUndo.IsPresent
+        return [PSCustomObject]@{ Configured = $true; Changed = $true; Count = $count }
+    } finally {
+        if ($cloudPath -and (Test-Path -LiteralPath $cloudPath -PathType Leaf)) { Remove-Item -LiteralPath $cloudPath -Force -ErrorAction SilentlyContinue }
+    }
+}
+
 function Get-RuleMetadataByIdFromPackage {
     param($Package, [string]$SheetName, [string]$RuleId)
     $sheet = Assert-AllowedSheet -SheetName $SheetName
@@ -794,7 +1168,9 @@ function Get-RuleByIdFromPackage {
         if ([string]($worksheet.Cells[$row, 1].Value) -eq $RuleId) {
             $record = [ordered]@{}
             for ($column = 1; $column -le $headers.Count; $column++) {
-                $record[$headers[$column - 1]] = [string]($worksheet.Cells[$row, $column].Value)
+                $cell = $worksheet.Cells[$row, $column]
+                $record[$headers[$column - 1]] = [string]$cell.Value
+                if ($headers[$column - 1] -eq '备注/原因') { $record['备注/原因链接'] = Get-CellHyperlinkUrl -Cell $cell }
             }
             return [PSCustomObject]$record
         }
@@ -869,6 +1245,7 @@ function Convert-InputToRule {
         发布者 = Get-LimitedText -Value $Data.publisher -FieldName '发布者' -MaximumLength 256
         '状态/分类' = Get-CanonicalRuleStatus -SheetName $sheet
         '备注/原因' = $note
+        '备注/原因链接' = Get-SafeHttpUrl -Value $Data.noteLink
         添加人 = $addedBy
         添加时间 = $addedTime
     }
@@ -944,10 +1321,14 @@ function Add-RuleToPackageWithState {
     for ($column = 1; $column -le $State.Headers.Count; $column++) {
         $header = $State.Headers[$column - 1]
         if ($header -eq 'id') { $State.Worksheet.Cells[$State.NextRow, $column].Value = [long]$State.NextId }
-        else {
+            else {
             $property = $Rule.PSObject.Properties[$header]
             $value = if ($null -ne $property -and $null -ne $property.Value) { [string]$property.Value } else { '' }
             $State.Worksheet.Cells[$State.NextRow, $column].Value = $value
+            if ($header -eq '备注/原因') {
+                $noteLink = Get-SafeHttpUrl -Value $Rule.'备注/原因链接'
+                if (-not [string]::IsNullOrWhiteSpace($noteLink)) { $State.Worksheet.Cells[$State.NextRow, $column].Hyperlink = [Uri]$noteLink }
+            }
             $State.Worksheet.Cells[$State.NextRow, $column].Style.Numberformat.Format = '@'
         }
     }
@@ -1080,6 +1461,7 @@ function New-ComplianceItem {
         安装路径 = if ($isSoftware) { [string]$Source.安装路径 } else { '' }
         状态 = $Status
         原因 = $Reason
+        '备注/原因链接' = if ($null -ne $MatchedRule) { [string]$MatchedRule.'备注/原因链接' } else { '' }
         类型 = $ItemType
         插件ID = if ($isSoftware) { '' } else { [string]$Source.ExtensionId }
         Locations = if ($isSoftware) { $null } else { $Source.Locations }
@@ -1208,6 +1590,7 @@ function Clear-SystemGeneratedRuleNotes {
                 $cell = $worksheet.Cells[$row, $noteColumn]
                 if (([string]$cell.Value) -ne (Get-UserNoteText $cell.Value)) {
                     $cell.Value = ''
+                    $cell.Hyperlink = $null
                     $cell.Style.Numberformat.Format = '@'
                     $cleared++
                 }
@@ -1404,15 +1787,37 @@ function ConvertTo-HtmlEncodedText {
     return [System.Net.WebUtility]::HtmlEncode([string]$Value)
 }
 
+function ConvertTo-SafeNoteHtml {
+    param([object]$Text, [object]$Link)
+    $textValue = if ($null -eq $Text) { '' } else { [string]$Text }
+    $encodedText = ConvertTo-HtmlEncodedText $textValue
+    $safeLink = Get-SafeHttpUrl -Value $Link
+    if (-not [string]::IsNullOrWhiteSpace($safeLink) -and -not [string]::IsNullOrWhiteSpace($textValue)) {
+        return ("<a href='$(ConvertTo-HtmlEncodedText $safeLink)' target='_blank' rel='noopener noreferrer'>$encodedText</a>")
+    }
+    $pattern = '(https?://[^\s<]+)'
+    return [regex]::Replace($encodedText, $pattern, {
+        param($match)
+        $raw = $match.Value
+        $trimmed = $raw.TrimEnd('.', ',', ';', ':', '。', '，', '；', '：')
+        $suffix = $raw.Substring($trimmed.Length)
+        $decoded = $trimmed -replace '&amp;', '&'
+        $detectedLink = Get-SafeHttpUrl -Value $decoded
+        if ([string]::IsNullOrWhiteSpace($detectedLink)) { return $raw }
+        return "<a href='$(ConvertTo-HtmlEncodedText $detectedLink)' target='_blank' rel='noopener noreferrer'>$trimmed</a>$suffix"
+    })
+}
+
 function Get-RowHtml {
     param($Item, [bool]$NeedsAction)
     $name = ConvertTo-HtmlEncodedText $Item.名称
     $version = ConvertTo-HtmlEncodedText $Item.版本
     $publisher = ConvertTo-HtmlEncodedText $Item.发布者
-        $reason = ConvertTo-HtmlEncodedText $Item.原因
+        $reason = Get-UserNoteText $Item.原因
     $status = ConvertTo-HtmlEncodedText $Item.状态
     $matchedRule = $Item.MatchedRule
     $noteReason = if ($null -ne $matchedRule) { ConvertTo-HtmlEncodedText $matchedRule.'备注/原因' } else { '' }
+    $noteLink = if ($null -ne $matchedRule) { ConvertTo-HtmlEncodedText $matchedRule.'备注/原因链接' } else { '' }
     $addedBy = if ($null -ne $matchedRule) { ConvertTo-HtmlEncodedText $matchedRule.'添加人' } else { '' }
     $addedTime = if ($null -ne $matchedRule) { ConvertTo-HtmlEncodedText $matchedRule.'添加时间' } else { '' }
 
@@ -1435,7 +1840,7 @@ function Get-RowHtml {
         }
         $locationText = '安装位置: ' + (($parts | Select-Object -Unique) -join ' · ')
     }
-    $locationHtml = if ([string]::IsNullOrWhiteSpace($locationText)) { '' } else { "<div class='item-location'>$(ConvertTo-HtmlEncodedText $locationText)</div>" }
+    $locationHtml = if ([string]::IsNullOrWhiteSpace($locationText)) { '' } else { "<div class='tooltip-wrapper'><div class='item-location'>$(ConvertTo-HtmlEncodedText $locationText)</div><div class='copyable-tooltip'>$(ConvertTo-HtmlEncodedText $locationText)</div></div>" }
     $rowClass = switch ([string]$Item.状态) {
         '命中黑名单' { 'row-red row-banned' }
         '待定' { 'row-pending' }
@@ -1460,7 +1865,7 @@ function Get-RowHtml {
           <label>关键词<input type="text" name="namePattern" value="$name" maxlength="512"></label>
           <label>版本号（留空=不锁版本）<input type="text" name="version" value="" maxlength="128"><button type="button" class="use-current-version" data-current-version="$version">用当前版本</button></label>
                     <label>发布者<input type="text" name="publisher" value="$publisher" maxlength="256"></label>
-          <label>备注/原因<input type="text" name="note" value="$noteReason" maxlength="2000"></label>
+          <label>备注/原因<input type="text" name="note" value="$noteReason" maxlength="2000"><input type="hidden" name="noteLink" value="$noteLink"></label>
           <label>添加人<input type="text" value="$addedBy" readonly></label>
           <label>添加时间<input type="text" value="$addedTime" readonly></label>
 
@@ -1469,8 +1874,10 @@ function Get-RowHtml {
 "@
     }
     $checkbox = if ($NeedsAction) { "<input type='checkbox' class='row-chk'>" } else { '' }
+    $reasonHtml = ConvertTo-SafeNoteHtml -Text $reason -Link $Item.'备注/原因链接'
+    $reasonWrapper = if ([string]::IsNullOrWhiteSpace($reason)) { '' } else { "<div class='tooltip-wrapper'><div class='truncate-hover'>$reasonHtml</div><div class='copyable-tooltip reason-tooltip'>$reasonHtml</div></div>" }
     return @"
-    <tr class="$rowClass"><td class="chk-cell">$checkbox</td><td class="item-cell">$iconHtml<div class="item-main"><div class="item-title"><span class="item-name">$name</span></div>$locationHtml</div></td><td>$version</td><td>$publisher</td><td>$status</td><td class="reason">$reason</td><td>$actionHtml</td></tr>
+    <tr class="$rowClass"><td class="chk-cell">$checkbox</td><td class="item-cell"><div class="item-cell-wrapper">$iconHtml<div class="item-main"><div class="item-title"><div class="tooltip-wrapper"><div class="item-name">$name</div><div class="copyable-tooltip">$name</div></div></div>$locationHtml</div></div></td><td>$version</td><td>$publisher</td><td>$status</td><td class="reason">$reasonWrapper</td><td>$actionHtml</td></tr>
 "@
 }
 
@@ -1499,7 +1906,7 @@ function Build-ReportHtml {
     }
     $greenRows = ($green | ForEach-Object { Get-RowHtml -Item $_ -NeedsAction $true }) -join "`n"
     $body += "<div class='section-container'><details class='green-section'><summary><h2 class='sec-green'>&#128994; 已匹配（点击展开，共 $($green.Count) 项）</h2><label class='section-select green-select'><input type='checkbox' class='section-chk'> 全选本区</label></summary>$tableHead$greenRows$tableTail</details></div>"
-    $summary = "<div class='summary'><span>核对时间：$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')</span><span class='tag tag-red'>黑名单：$($red.Count)</span><span class='tag tag-yellow'>版本变化：$($yellow.Count)</span><span class='tag tag-pending'>待定：$($pending.Count)</span><span class='tag tag-green'>已匹配：$($green.Count)</span><span class='tag'>清单文件：$(ConvertTo-HtmlEncodedText $Path)</span><button type='button' id='openManagementButton' class='manage-button'>清单维护</button><button type='button' id='reloadButton'>重新扫描</button></div>"
+    $summary = "<div class='summary'><span>核对时间：$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')</span><span class='tag tag-red'>黑名单：$($red.Count)</span><span class='tag tag-yellow'>版本变化：$($yellow.Count)</span><span class='tag tag-pending'>待定：$($pending.Count)</span><span class='tag tag-green'>已匹配：$($green.Count)</span><span class='tag'>清单文件：$(ConvertTo-HtmlEncodedText $Path)</span><button type='button' id='openManagementButton'>清单维护</button><button type='button' id='cloudSettingsButton'>云端清单设置</button><button type='button' id='cloudSyncButton'>立即同步</button><button type='button' id='reloadButton'>重新扫描分类</button></div>"
     $template = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'report_template.html') -Raw -Encoding UTF8
     return $template.Replace('__SUMMARY__', $summary).Replace('__BODY__', $body).Replace('__CSRF_TOKEN__', (ConvertTo-HtmlEncodedText $CsrfToken)).Replace('__CSP_NONCE__', (ConvertTo-HtmlEncodedText $Nonce))
 }
@@ -1690,8 +2097,21 @@ function Start-ReportServer {
                     $pending = @(Convert-RulesForWeb -Rules @($allRules.'待定') -IncludeSystem $IncludeSystem)
                     Write-JsonResponse -Response $response -Object @{ ok = $true; blackRules = $black; whiteRules = $white; pendingRules = $pending; canUndo = ($null -ne $script:LastUndoSnapshot); takeoverUnlocked = $script:TakeoverUnlocked } -StatusCode 200 -Nonce $nonce
 
+                } elseif ($request.HttpMethod -eq 'GET' -and $route -eq '/api/manage/cloudSettings') {
+                    $cloudSettings = Read-CloudSettings
+                    $cloudUrl = if ($null -ne $cloudSettings) { [string]$cloudSettings.url } else { '' }
+                    Write-JsonResponse -Response $response -Object @{ ok = $true; configured = ($null -ne $cloudSettings); url = $cloudUrl } -StatusCode 200 -Nonce $nonce
+
                 } elseif ($request.HttpMethod -eq 'GET' -and $route -eq '/') {
                     $forceRefresh = $request.QueryString['refresh'] -eq '1'
+                    if ($forceRefresh) {
+                        try {
+                            $cloudSyncResult = Sync-CloudWorkbook -Path $Path
+                            if ($cloudSyncResult.Configured -and $cloudSyncResult.Changed) { Write-Host "重新扫描：已从云端同步规则到本地清单：$($cloudSyncResult.Count) 条" -ForegroundColor Green }
+                        } catch {
+                            Write-Host "重新扫描：云端规则同步已跳过（$($_.Exception.Message)）" -ForegroundColor Yellow
+                        }
+                    }
                     $inventory = Get-InventoryData -ForceRefresh:$forceRefresh -IncludeSystem:$IncludeSystem
                     $allRules = Import-AllRuleSheets -Path $Path
                     $black = @($allRules.'黑名单')
@@ -1712,6 +2132,13 @@ function Start-ReportServer {
                     if ($route -eq '/api/manage/password') {
                         Set-TakeoverPasswords -Data $data
                         Write-JsonResponse -Response $response -Object @{ ok = $true } -StatusCode 200 -Nonce $nonce
+                    } elseif ($route -eq '/api/manage/cloudSettings') {
+                        $cloudUrl = Get-LimitedText -Value $data.url -FieldName 'Google Sheets 链接' -MaximumLength 2048 -Required
+                        $exportUrl = Write-CloudSettings -Url $cloudUrl
+                        Write-JsonResponse -Response $response -Object @{ ok = $true; url = $cloudUrl; exportUrl = $exportUrl } -StatusCode 200 -Nonce $nonce
+                    } elseif ($route -eq '/api/manage/cloudSync') {
+                        $syncResult = Sync-CloudWorkbook -Path $Path -CreateUndo
+                        Write-JsonResponse -Response $response -Object @{ ok = $true; configured = $syncResult.Configured; changed = $syncResult.Changed; count = $syncResult.Count; canUndo = ($null -ne $script:LastUndoSnapshot) } -StatusCode 200 -Nonce $nonce
                     } elseif ($route -eq '/api/manage/takeover') {
                         $settings = Read-TakeoverSettings
                         if ($null -eq $settings) { throw '尚未设置接管密码，请先点击“设置接管密码”。' }
@@ -1887,6 +2314,13 @@ try {
     $clearedSystemNotes = Clear-SystemGeneratedRuleNotes -Path $ListPath
     if ($clearedSystemNotes -gt 0) { Write-Host "已清理系统生成的备注/原因：$clearedSystemNotes 条" -ForegroundColor Yellow }
     Assert-WorkbookPathSchema -Path $ListPath
+    try {
+        $cloudSyncResult = Sync-CloudWorkbook -Path $ListPath
+        if ($cloudSyncResult.Configured -and $cloudSyncResult.Changed) { Write-Host "已从云端同步规则到本地清单：$($cloudSyncResult.Count) 条" -ForegroundColor Green }
+        elseif ($cloudSyncResult.Configured) { Write-Host '云端规则已检查，本地清单无需更新。' -ForegroundColor DarkGray }
+    } catch {
+        Write-Host "云端规则同步已跳过，本次继续使用本地清单：$($_.Exception.Message)" -ForegroundColor Yellow
+    }
     Show-RuleConflictWarnings -Path $ListPath
     Start-ReportServer -RequestedPort $Port -Path $ListPath -IncludeSystem $IncludeSystemComponents.IsPresent
 } catch {

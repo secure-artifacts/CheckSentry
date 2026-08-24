@@ -87,6 +87,7 @@ function Resolve-InstallLocationIconReference {
                 elseif (-not [string]::IsNullOrWhiteSpace($normalizedName) -and -not [string]::IsNullOrWhiteSpace($normalizedBaseName) -and $normalizedBaseName.Contains($normalizedName)) { $score = 1 }
                 [PSCustomObject]@{ File = $_; Score = $score }
             } |
+            Where-Object { $_.Score -gt 0 } |
             Sort-Object @{ Expression = { $_.Score }; Descending = $true }, @{ Expression = { $_.File.Name }; Descending = $false } |
             Select-Object -First 1
         if ($null -ne $fallback) { return New-SoftwareIconReference -Path $fallback.File.FullName -Index 0 -Source 'InstallLocation' }
