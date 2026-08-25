@@ -1530,7 +1530,13 @@ function Add-NewPendingRules {
         foreach ($item in $candidates) {
             $itemType = [string]$item.类型
             $identity = Get-RuleIdentity -ItemType $itemType -ExtensionId ([string]$item.插件ID) -NamePattern ([string]$item.名称)
-            if ($existingIdentities.ContainsKey($identity)) { continue }
+            if ($existingIdentities.ContainsKey($identity)) {
+                $existingRule = $existingIdentities[$identity]
+                $item.MatchedSheet = $existingRule.Sheet
+                $item.MatchedRuleId = $existingRule.Rule.id
+                $item.MatchedRule = $existingRule.Rule
+                continue
+            }
             $ruleData = [PSCustomObject]@{
                 type = $itemType
                 extId = [string]$item.插件ID
@@ -1542,7 +1548,11 @@ function Add-NewPendingRules {
 
             }
             $rule = Convert-InputToRule -Data $ruleData -TargetSheet '待定'
-            $null = Add-RuleToPackageWithState -State $pendingState -Rule $rule
+            $newId = Add-RuleToPackageWithState -State $pendingState -Rule $rule
+            $rule | Add-Member -NotePropertyName "id" -NotePropertyValue $newId -Force
+            $item.MatchedRule = $rule
+            $item.MatchedRuleId = [string]$newId
+            $item.MatchedSheet = "待定"
             $existingIdentities[$identity] = $true
             $added++
         }
@@ -1812,7 +1822,8 @@ function Get-RowHtml {
     param($Item, [bool]$NeedsAction)
     $name = ConvertTo-HtmlEncodedText $Item.名称
     $version = ConvertTo-HtmlEncodedText $Item.版本
-    $publisher = ConvertTo-HtmlEncodedText $Item.发布者
+    $publisherText = ConvertTo-HtmlEncodedText $Item.发布者
+    $publisher = if ([string]::IsNullOrWhiteSpace($publisherText)) { '' } else { "<div class='tooltip-wrapper'><div class='truncate-hover'>$publisherText</div><div class='copyable-tooltip'>$publisherText</div></div>" }
         $reason = Get-UserNoteText $Item.原因
     $status = ConvertTo-HtmlEncodedText $Item.状态
     $matchedRule = $Item.MatchedRule
@@ -1864,7 +1875,7 @@ function Get-RowHtml {
           <label>匹配方式<select name="matchType">$matchOptions</select></label>
           <label>关键词<input type="text" name="namePattern" value="$name" maxlength="512"></label>
           <label>版本号（留空=不锁版本）<input type="text" name="version" value="" maxlength="128"><button type="button" class="use-current-version" data-current-version="$version">用当前版本</button></label>
-                    <label>发布者<input type="text" name="publisher" value="$publisher" maxlength="256"></label>
+                    <label>发布者<input type="text" name="publisher" value="$publisherText" maxlength="256"></label>
           <label>备注/原因<input type="text" name="note" value="$noteReason" maxlength="2000"><input type="hidden" name="noteLink" value="$noteLink"></label>
           <label>添加人<input type="text" value="$addedBy" readonly></label>
           <label>添加时间<input type="text" value="$addedTime" readonly></label>
@@ -1875,7 +1886,7 @@ function Get-RowHtml {
     }
     $checkbox = if ($NeedsAction) { "<input type='checkbox' class='row-chk'>" } else { '' }
     $reasonHtml = ConvertTo-SafeNoteHtml -Text $reason -Link $Item.'备注/原因链接'
-    $reasonWrapper = if ([string]::IsNullOrWhiteSpace($reason)) { '' } else { "<div class='tooltip-wrapper'><div class='truncate-hover'>$reasonHtml</div><div class='copyable-tooltip reason-tooltip'>$reasonHtml</div></div>" }
+    $reasonWrapper = if ([string]::IsNullOrWhiteSpace($reason)) { "<div class='tooltip-wrapper'><div class='truncate-hover'>-</div><div class='copyable-tooltip reason-tooltip'>-</div></div>" } else { "<div class='tooltip-wrapper'><div class='truncate-hover'>$reasonHtml</div><div class='copyable-tooltip reason-tooltip'>$reasonHtml</div></div>" }
     return @"
     <tr class="$rowClass"><td class="chk-cell">$checkbox</td><td class="item-cell"><div class="item-cell-wrapper">$iconHtml<div class="item-main"><div class="item-title"><div class="tooltip-wrapper"><div class="item-name">$name</div><div class="copyable-tooltip">$name</div></div></div>$locationHtml</div></div></td><td>$version</td><td>$publisher</td><td>$status</td><td class="reason">$reasonWrapper</td><td>$actionHtml</td></tr>
 "@
@@ -2013,18 +2024,43 @@ function Write-RuleChange {
         param($package)
         if (-not [string]::IsNullOrWhiteSpace($originalId)) {
             $null = Assert-AllowedSheet -SheetName $originalSheet
-            $metadata = Get-RuleMetadataByIdFromPackage -Package $package -SheetName $originalSheet -RuleId $originalId
-            if (-not $script:TakeoverUnlocked -or -not $hasMetadataInput) {
-                $rule.添加人 = $metadata.添加人
-                $rule.添加时间 = $metadata.添加时间
+            try {
+                $metadata = Get-RuleMetadataByIdFromPackage -Package $package -SheetName $originalSheet -RuleId $originalId
+                if (-not $script:TakeoverUnlocked -or -not $hasMetadataInput) {
+                    $rule.添加人 = $metadata.添加人
+                    $rule.添加时间 = $metadata.添加时间
+                }
+                Remove-RuleByIdFromPackage -Package $package -SheetName $originalSheet -RuleId $originalId
+            } catch {
+                # 容错：如果按 ID 找不到，可能是因为多次连续保存前端未刷新最新 ID。
+                # 此时尝试通过 Identity 删除旧规则。
+                $foundSheet = $null
+                $foundId = $null
+                foreach ($sheet in $script:AllowedSheets) {
+                    $worksheet = $package.Workbook.Worksheets[$sheet]
+                    if ($null -eq $worksheet.Dimension) { continue }
+                    $headers = Get-ExpectedHeaders -SheetName $sheet
+                    $idCol = [array]::IndexOf($headers, 'id') + 1
+                    for ($r = 2; $r -le $worksheet.Dimension.End.Row; $r++) {
+                        if ((Get-WorksheetRowIdentity -Worksheet $worksheet -Row $r -SheetName $sheet) -eq $identity) {
+                            $foundSheet = $sheet
+                            $foundId = [string]($worksheet.Cells[$r, $idCol].Value)
+                            $metadata = Get-RuleMetadataByIdFromPackage -Package $package -SheetName $sheet -RuleId $foundId
+                            if (-not $script:TakeoverUnlocked -or -not $hasMetadataInput) {
+                                $rule.添加人 = $metadata.添加人
+                                $rule.添加时间 = $metadata.添加时间
+                            }
+                            Remove-RuleByIdFromPackage -Package $package -SheetName $sheet -RuleId $foundId
+                            break
+                        }
+                    }
+                    if ($null -ne $foundId) { break }
+                }
             }
-            Remove-RuleByIdFromPackage -Package $package -SheetName $originalSheet -RuleId $originalId
         }
-        if ($isExplicitClassification -or -not [string]::IsNullOrWhiteSpace($originalId)) {
-            Remove-IdentityFromPackage -Package $package -Identity $identity
-        } elseif (Test-IdentityInSheet -Package $package -SheetName $TargetSheet -Identity $identity) {
-            throw "【$TargetSheet】中已存在同一对象的规则。"
-        }
+        
+        # 清理可能存在的同身份其他规则，防止冲突
+        Remove-IdentityFromPackage -Package $package -Identity $identity
         return Add-RuleToPackage -Package $package -SheetName $TargetSheet -Rule $rule
     }
     return Invoke-WorkbookTransaction -Path $Path -Operation $operation -CreateUndo

@@ -373,6 +373,112 @@ function Get-RegistryUninstallEntries {
     }
 }
 
+function Get-AppxSoftwareList {
+    $items = @()
+    try {
+        $appNames = @{}
+        $shell = $null
+        try {
+            $shell = New-Object -ComObject WScript.Shell
+            # We use Shell.Application for AppsFolder
+            $shellApp = New-Object -ComObject Shell.Application
+            $appsFolder = $shellApp.Namespace('shell:AppsFolder')
+            if ($null -ne $appsFolder) {
+                foreach ($item in $appsFolder.Items()) {
+                    if ($item.Path -match '^([^!]+)!') {
+                        $pfn = $matches[1]
+                        if (-not $appNames.ContainsKey($pfn)) {
+                            $appNames[$pfn] = $item.Name
+                        }
+                    }
+                }
+            }
+        } catch {
+            Write-Verbose "读取 shell:AppsFolder 失败: $($_.Exception.Message)"
+        } finally {
+            if ($null -ne $shellApp -and [Runtime.InteropServices.Marshal]::IsComObject($shellApp)) {
+                try { $null = [Runtime.InteropServices.Marshal]::FinalReleaseComObject($shellApp) } catch {}
+            }
+            if ($null -ne $shell -and [Runtime.InteropServices.Marshal]::IsComObject($shell)) {
+                try { $null = [Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) } catch {}
+            }
+        }
+
+        $packages = Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object {
+            -not $_.IsFramework -and
+            -not $_.IsResourcePackage -and
+            -not $_.NonRemovable -and
+            $_.SignatureKind -ne 'System'
+        }
+
+        foreach ($pkg in $packages) {
+            $displayName = $pkg.Name
+            if ($appNames.ContainsKey($pkg.PackageFamilyName)) {
+                $displayName = $appNames[$pkg.PackageFamilyName]
+            }
+
+            $iconPath = ''
+            $manifestPath = Join-Path $pkg.InstallLocation "AppxManifest.xml"
+            if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+                try {
+                    $xml = [xml](Get-Content -LiteralPath $manifestPath -Raw -ErrorAction Stop)
+                    
+                    # 声明 XML 命名空间，处理可能带命名空间前缀的节点
+                    $ns = New-Object System.Xml.XmlNamespaceManager($xml.NameTable)
+                    $ns.AddNamespace("ns", $xml.DocumentElement.NamespaceURI)
+                    $ns.AddNamespace("uap", "http://schemas.microsoft.com/appx/manifest/uap/windows10")
+
+                    $logoNode = $xml.SelectSingleNode("//ns:Properties/ns:Logo", $ns)
+                    $logoRel = if ($null -ne $logoNode) { $logoNode.InnerText } else { '' }
+
+                    if ([string]::IsNullOrWhiteSpace($logoRel)) {
+                        $appNode = $xml.SelectSingleNode("//ns:Applications/ns:Application[1]/uap:VisualElements", $ns)
+                        if ($null -ne $appNode) {
+                            $logoRel = $appNode.GetAttribute("Square44x44Logo")
+                            if ([string]::IsNullOrWhiteSpace($logoRel)) {
+                                $logoRel = $appNode.GetAttribute("Square150x150Logo")
+                            }
+                        }
+                    }
+
+                    if (-not [string]::IsNullOrWhiteSpace($logoRel)) {
+                        $logoBase = [System.IO.Path]::GetFileNameWithoutExtension($logoRel)
+                        $logoDir = [System.IO.Path]::GetDirectoryName($logoRel)
+                        $searchDir = Join-Path $pkg.InstallLocation $logoDir
+                        if (Test-Path -LiteralPath $searchDir -PathType Container) {
+                            $candidates = Get-ChildItem -LiteralPath $searchDir -Filter "$logoBase*.png" -File -ErrorAction SilentlyContinue
+                            if ($candidates.Count -gt 0) {
+                                $iconPath = $candidates[0].FullName
+                            }
+                        }
+                    }
+                } catch {
+                    Write-Verbose "读取 AppxManifest 失败: $($pkg.PackageFullName)"
+                }
+            }
+
+            $items += [PSCustomObject]@{
+                DisplayName     = $displayName
+                DisplayVersion  = $pkg.Version
+                Publisher       = $pkg.Publisher
+                InstallDate     = ''
+                InstallLocation = $pkg.InstallLocation
+                UninstallString = "Remove-AppxPackage -Package '$($pkg.PackageFullName)'"
+                DisplayIcon     = $iconPath
+                SystemComponent = 0
+                ParentKeyName   = ''
+                ReleaseType     = ''
+                RegistryHive    = 'AppX'
+                RegistryView    = 'Default'
+                RegistryKeyName = $pkg.PackageFullName
+            }
+        }
+    } catch {
+        Write-Verbose "获取 AppxPackage 失败: $($_.Exception.Message)"
+    }
+    return $items
+}
+
 function Get-InstalledSoftwareList {
     [CmdletBinding()]
     param([switch]$IncludeSystemComponents)
@@ -391,6 +497,8 @@ function Get-InstalledSoftwareList {
             $raw += @(Get-RegistryUninstallEntries -Hive $hive -View $view)
         }
     }
+
+    $raw += @(Get-AppxSoftwareList)
 
     $raw = @($raw | Where-Object {
         $null -ne $_.DisplayName -and -not [string]::IsNullOrWhiteSpace([string]$_.DisplayName)

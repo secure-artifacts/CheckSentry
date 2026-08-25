@@ -149,6 +149,7 @@
     <button id="batchWhiteButton" class="batch-white-btn" disabled>加入白名单</button>
     <button id="batchPendingButton" class="batch-pending-btn" disabled>标记待定</button>
     <button id="batchBlackButton" class="batch-black-btn" disabled>加入黑名单</button>
+    <button id="btnCopySelected" class="undo-btn" disabled>复制已选</button>
     <span id="selectedCount" class="selected-count">已选 0 条</span>
     <button id="takeoverButton" class="takeover-btn">接管记录</button>
     <button id="passwordButton" class="password-btn">设置接管密码</button>
@@ -387,6 +388,42 @@ function formatAddedTime(value) {
   }
 
   return text;
+}
+
+function toClipboardCell(val) {
+  if (val == null) return "";
+  let str = String(val).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  if (str.includes("\t") || str.includes("\n") || str.includes("\"")) {
+    return "\"" + str.replace(/\"/g, "\"\"") + "\"";
+  }
+  return str;
+}
+
+function toClipboardCell(val) {
+  if (val == null) return "";
+  let str = String(val).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  if (str.includes("\t") || str.includes("\n") || str.includes("\"")) {
+    return "\"" + str.replace(/\"/g, "\"\"") + "\"";
+  }
+  return str;
+}
+
+function toClipboardCell(val) {
+  if (val == null) return "";
+  let str = String(val).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  if (str.includes("\t") || str.includes("\n") || str.includes("\"")) {
+    return "\"" + str.replace(/\"/g, "\"\"") + "\"";
+  }
+  return str;
+}
+
+function toClipboardCell(val) {
+  if (val == null) return '';
+  let str = String(val).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  if (str.includes('\t') || str.includes('\n') || str.includes('"')) {
+    return '"' + str.replace(/"/g, '""') + '"';
+  }
+  return str;
 }
 
 function inlineDisplayValue(rule, key) {
@@ -804,9 +841,9 @@ function updateBatchSelectionUi() {
   const selectedCount = getSelectedRuleItems().length;
   const countElement = document.getElementById('selectedCount');
   if (countElement) countElement.textContent = '已选 ' + selectedCount + ' 条';
-  ['batchWhiteButton', 'batchPendingButton', 'batchBlackButton'].forEach(function(id) {
-    const button = document.getElementById(id);
-    if (button) button.disabled = selectedCount === 0;
+  ['batchWhiteButton', 'batchPendingButton', 'batchBlackButton', 'btnCopySelected'].forEach(function(id) {
+    const btn = document.getElementById(id);
+    if (btn) btn.disabled = (selectedCount === 0);
   });
   const selectAllButton = document.getElementById('selectAllButton');
   if (selectAllButton) selectAllButton.disabled = currentRules.length === 0;
@@ -1073,6 +1110,44 @@ document.getElementById('invertSelectionButton').addEventListener('click', inver
 document.getElementById('batchWhiteButton').addEventListener('click', () => batchMoveSelected('白名单'));
 document.getElementById('batchPendingButton').addEventListener('click', () => batchMoveSelected('待定'));
 document.getElementById('batchBlackButton').addEventListener('click', () => batchMoveSelected('黑名单'));
+document.getElementById('btnCopySelected').addEventListener('click', async () => {
+  const checked = document.querySelectorAll('input.row-select:checked');
+  if (checked.length === 0) {
+    showToast('请先勾选要复制的项', true);
+    return;
+  }
+  const rows = [];
+  checked.forEach(chk => {
+    const tr = chk.closest('tr');
+    const cells = tr.querySelectorAll('td');
+    if (cells.length < 13) return;
+    const values = [];
+    for (let i = 2; i <= 12; i++) {
+      const contentCell = cells[i].querySelector('.cell-content') || cells[i].querySelector('.truncate-text') || cells[i].querySelector('.truncate-text-single');
+      values.push(contentCell ? contentCell.textContent.trim() : cells[i].textContent.trim());
+    }
+    rows.push(values.map(toClipboardCell).join('\t'));
+  });
+  const text = rows.join('\r\n');
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const area = document.createElement('textarea');
+      area.value = text;
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.focus();
+      area.select();
+      document.execCommand('copy');
+      area.remove();
+    }
+    showToast('已复制，可直接粘贴到 Excel 或 Google Sheets', false);
+  } catch (e) {
+    showToast('复制失败：' + e.message, true);
+  }
+});
 document.getElementById('takeoverButton').addEventListener('click', openTakeoverModal);
 document.getElementById('passwordButton').addEventListener('click', openPasswordModal);
 document.getElementById('cloudButton').addEventListener('click', openCloudModal);
