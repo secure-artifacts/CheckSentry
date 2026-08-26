@@ -404,13 +404,12 @@ function Get-AppxSoftwareList {
             }
         }
 
-        $packages = Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object {
+                $packages = Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object {
             -not $_.IsFramework -and
             -not $_.IsResourcePackage -and
             -not $_.NonRemovable -and
             $_.SignatureKind -ne 'System'
         }
-
         foreach ($pkg in $packages) {
             $displayName = $pkg.Name
             if ($appNames.ContainsKey($pkg.PackageFamilyName)) {

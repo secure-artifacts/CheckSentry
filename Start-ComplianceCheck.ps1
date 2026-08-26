@@ -1418,13 +1418,14 @@ function Test-PublisherMatch {
 }
 
 function Find-FirstMatchingRule {
-    param($Rules, [string]$ItemType, [string]$DisplayName, [string]$Publisher, [string]$ExtensionId)
+    param($Rules, [string]$ItemType, [string]$DisplayName, [string]$Publisher, [string]$ExtensionId, [string]$Version, [switch]$IgnoreVersion)
     foreach ($rule in @($Rules)) {
         $ruleType = if ([string]::IsNullOrWhiteSpace([string]$rule.'类型')) { '软件' } else { [string]$rule.'类型' }
         if ($ruleType -ne $ItemType) { continue }
         $testName = if ($rule.'匹配方式' -eq '插件ID精确') { $ExtensionId } else { $DisplayName }
         if (-not (Test-NameMatch -InstalledName $testName -Rule $rule)) { continue }
         if (-not (Test-PublisherMatch -InstalledPublisher $Publisher -RulePublisher $rule.'发布者')) { continue }
+        if (-not $IgnoreVersion -and -not (Test-VersionMatch -InstalledVersion $Version -RuleVersion ([string]$rule.'版本号'))) { continue }
         return $rule
     }
     return $null
@@ -1483,29 +1484,29 @@ function Get-ComplianceResult {
         $version = if ($ItemType -eq '软件') { [string]$item.版本 } else { [string]$item.Version }
         $extensionId = if ($ItemType -eq '软件') { '' } else { [string]$item.ExtensionId }
 
-        $black = Find-FirstMatchingRule -Rules $BlackRules -ItemType $ItemType -DisplayName $displayName -Publisher $publisher -ExtensionId $extensionId
-                if ($null -ne $black) {
+        $black = Find-FirstMatchingRule -Rules $BlackRules -ItemType $ItemType -DisplayName $displayName -Publisher $publisher -ExtensionId $extensionId -Version $version
+        if ($null -ne $black) {
             $reason = Get-UserNoteText $black.'备注/原因'
             $results += New-ComplianceItem -Source $item -ItemType $ItemType -Status '命中黑名单' -Reason $reason -MatchedRule $black -MatchedSheet '黑名单'
 
             continue
         }
 
-        $white = Find-FirstMatchingRule -Rules $WhiteRules -ItemType $ItemType -DisplayName $displayName -Publisher $publisher -ExtensionId $extensionId
+                $white = Find-FirstMatchingRule -Rules $WhiteRules -ItemType $ItemType -DisplayName $displayName -Publisher $publisher -ExtensionId $extensionId -Version $version
         if ($null -ne $white) {
-            if (Test-VersionMatch -InstalledVersion $version -RuleVersion ([string]$white.'版本号')) {
-                                $reason = Get-UserNoteText $white.'备注/原因'
-
-                $results += New-ComplianceItem -Source $item -ItemType $ItemType -Status '已匹配' -Reason $reason -MatchedRule $white -MatchedSheet '白名单'
-            } else {
-                                $results += New-ComplianceItem -Source $item -ItemType $ItemType -Status '版本变化' -Reason '' -MatchedRule $white -MatchedSheet '白名单'
-
-            }
+            $reason = Get-UserNoteText $white.'备注/原因'
+            $results += New-ComplianceItem -Source $item -ItemType $ItemType -Status '已匹配' -Reason $reason -MatchedRule $white -MatchedSheet '白名单'
+            continue
+        }
+        # 如果找不到精确匹配版本的白名单，尝试寻找名称匹配但版本不限/不匹配的规则，标记为“版本变化”
+        $whiteAnyVersion = Find-FirstMatchingRule -Rules $WhiteRules -ItemType $ItemType -DisplayName $displayName -Publisher $publisher -ExtensionId $extensionId -Version $version -IgnoreVersion
+        if ($null -ne $whiteAnyVersion) {
+            $results += New-ComplianceItem -Source $item -ItemType $ItemType -Status '版本变化' -Reason '' -MatchedRule $whiteAnyVersion -MatchedSheet '白名单'
             continue
         }
 
-        $pending = Find-FirstMatchingRule -Rules $PendingRules -ItemType $ItemType -DisplayName $displayName -Publisher $publisher -ExtensionId $extensionId
-                if ($null -ne $pending) {
+        $pending = Find-FirstMatchingRule -Rules $PendingRules -ItemType $ItemType -DisplayName $displayName -Publisher $publisher -ExtensionId $extensionId -Version $version
+        if ($null -ne $pending) {
             $reason = Get-UserNoteText $pending.'备注/原因'
             $results += New-ComplianceItem -Source $item -ItemType $ItemType -Status '待定' -Reason $reason -MatchedRule $pending -MatchedSheet '待定'
 
