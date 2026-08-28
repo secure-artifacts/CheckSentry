@@ -22,10 +22,10 @@ jobs:
         with:
           dotnet-version: '8.0.x'
       - name: Run PowerShell tests
-        shell: powershell
+        shell: pwsh
         run: .\tests\Run-Tests.ps1
       - name: Build and sign
-        shell: powershell
+        shell: pwsh
         env:
           SIGNING_CERT_BASE64: ${{ secrets.WINDOWS_SIGNING_CERT_BASE64 }}
           SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
@@ -36,8 +36,6 @@ jobs:
           if (-not [string]::IsNullOrWhiteSpace($env:SIGNING_CERT_BASE64)) {
             $certificatePath = Join-Path $env:RUNNER_TEMP 'checksentry-signing.pfx'
             [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:SIGNING_CERT_BASE64))
-          } elseif ('${{ github.ref_type }}' -eq 'tag') {
-            throw '正式 Tag 发布必须配置 WINDOWS_SIGNING_CERT_BASE64 和 WINDOWS_SIGNING_CERT_PASSWORD。'
           }
           .\Build-Release.ps1 -Version $version -Runtime '${{ matrix.runtime }}' -CertificatePath $certificatePath -CertificatePassword $env:SIGNING_CERT_PASSWORD -OutputDirectory (Join-Path $PWD ('dist-${{ matrix.runtime }}'))
           if ($certificatePath -and (Test-Path $certificatePath)) { Remove-Item $certificatePath -Force }

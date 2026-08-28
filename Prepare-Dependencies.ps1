@@ -1,4 +1,4 @@
-param([string]$PackagePath = '')
+﻿param([string]$PackagePath = '')
 
 $ErrorActionPreference = 'Stop'
 $version = '7.8.10'

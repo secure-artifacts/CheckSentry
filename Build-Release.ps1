@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$Version = '1.1.0',
     [ValidateSet('win-x64')][string[]]$Runtime = @('win-x64'),
     [string]$CertificatePath = '',
