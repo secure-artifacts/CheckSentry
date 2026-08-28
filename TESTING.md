@@ -24,7 +24,6 @@
 
 1. Windows 10/11 x64 + Windows PowerShell 5.1。
 2. Windows 10/11 x64 + 当前 PowerShell 7 LTS。
-3. ARM64 Windows 虚拟机或实体机（如具备条件），分别运行原生 PowerShell 7 ARM64 和系统 Windows PowerShell 5.1。
 
 每个组合都执行首次运行、重复扫描、清单维护、撤销和端口占用测试。
 

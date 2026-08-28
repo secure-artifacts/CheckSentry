@@ -15,7 +15,7 @@ jobs:
     runs-on: windows-latest
     strategy:
       matrix:
-        runtime: [win-x64, win-arm64]
+        runtime: [win-x64]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4

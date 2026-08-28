@@ -1,6 +1,6 @@
 param(
     [string]$Version = '1.1.0',
-    [ValidateSet('win-x64', 'win-arm64')][string[]]$Runtime = @('win-x64', 'win-arm64'),
+    [ValidateSet('win-x64')][string[]]$Runtime = @('win-x64'),
     [string]$CertificatePath = '',
     [string]$CertificatePassword = '',
     [string]$OutputDirectory = '',
