@@ -145,6 +145,12 @@
 
 ## 发布前最后检查
 
+- 在 Windows PowerShell 5.1 执行 `tests\Run-Tests.ps1`，必须全部通过。
+- 双击 `CheckSentry.exe` 后，浏览器应在 2 秒左右显示扫描进度页；扫描期间进度接口持续可响应。
+- 在 300 个以上软件的电脑上确认首屏扫描阶段不递归开始菜单、不批量提取 EXE/DLL 图标；滚动报告时图标才逐步加载。
+- Chromium 已禁用插件和仅残留在 Extensions 目录、但 Preferences/Secure Preferences 没有记录的插件默认不进入报告。
+- 同一插件在两个配置文件分别为 `1.2`、`1.3` 时，白名单 `1.3` 或 `1.*` 均能正确匹配。
+- 正式发布的 `CheckSentry.exe` 使用 `Get-AuthenticodeSignature` 或 `signtool verify /pa /v` 验证为有效签名。
 - 用全新解压目录完成 Windows PowerShell 5.1 和 PowerShell 7 两轮测试。
 - 确认 GitHub/压缩包中不存在 `list.xlsx`、锁文件、个人路径、备份、日志、测试结果和临时文件。
 - 校验发布压缩包 SHA-256 与随附校验文件一致。

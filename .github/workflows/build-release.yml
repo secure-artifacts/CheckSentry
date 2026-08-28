@@ -1,0 +1,65 @@
+name: Build, test and sign CheckSentry
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        runtime: [win-x64, win-arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Run PowerShell tests
+        shell: powershell
+        run: .\tests\Run-Tests.ps1
+      - name: Build and sign
+        shell: powershell
+        env:
+          SIGNING_CERT_BASE64: ${{ secrets.WINDOWS_SIGNING_CERT_BASE64 }}
+          SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
+        run: |
+          $version = '${{ github.ref_name }}'.TrimStart('v')
+          if ($version -notmatch '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$') { $version = '0.0.0-test' }
+          $certificatePath = ''
+          if (-not [string]::IsNullOrWhiteSpace($env:SIGNING_CERT_BASE64)) {
+            $certificatePath = Join-Path $env:RUNNER_TEMP 'checksentry-signing.pfx'
+            [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:SIGNING_CERT_BASE64))
+          } elseif ('${{ github.ref_type }}' -eq 'tag') {
+            throw '正式 Tag 发布必须配置 WINDOWS_SIGNING_CERT_BASE64 和 WINDOWS_SIGNING_CERT_PASSWORD。'
+          }
+          .\Build-Release.ps1 -Version $version -Runtime '${{ matrix.runtime }}' -CertificatePath $certificatePath -CertificatePassword $env:SIGNING_CERT_PASSWORD -OutputDirectory (Join-Path $PWD ('dist-${{ matrix.runtime }}'))
+          if ($certificatePath -and (Test-Path $certificatePath)) { Remove-Item $certificatePath -Force }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CheckSentry-${{ matrix.runtime }}
+          path: dist-${{ matrix.runtime }}/*.zip*
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'release/*.zip'
+      - name: Publish signed release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" release/*.zip release/*.sha256 --generate-notes

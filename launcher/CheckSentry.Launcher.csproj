@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>CheckSentry</AssemblyName>
+    <RootNamespace>CheckSentry.Launcher</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="..\Start-ComplianceCheck.ps1" LogicalName="payload/Start-ComplianceCheck.ps1" />
+    <EmbeddedResource Include="..\Get-InstalledSoftware.ps1" LogicalName="payload/Get-InstalledSoftware.ps1" />
+    <EmbeddedResource Include="..\Get-InstalledExtensions.ps1" LogicalName="payload/Get-InstalledExtensions.ps1" />
+    <EmbeddedResource Include="..\report_template.html" LogicalName="payload/report_template.html" />
+    <EmbeddedResource Include="..\management_template.html" LogicalName="payload/management_template.html" />
+    <EmbeddedResource Include="..\list_template.xlsx" LogicalName="payload/list_template.xlsx" />
+    <EmbeddedResource Include="..\Modules\ImportExcel\7.8.10\**\*" LogicalName="payload/Modules/ImportExcel/7.8.10/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

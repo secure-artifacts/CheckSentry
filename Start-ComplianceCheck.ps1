@@ -7,7 +7,10 @@
 param(
     [string]$ListPath = '',
     [int]$Port = 8787,
-    [switch]$IncludeSystemComponents
+    [switch]$IncludeSystemComponents,
+    [switch]$IncludeInactiveExtensions,
+    [switch]$ScanAllUsers,
+    [switch]$LibraryOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -20,11 +23,45 @@ $script:IconDataCache = @{}
 $script:RuleIconCache = @{}
 $script:RuleIconDataById = @{}
 $script:ReportIconData = @{}
+$script:IconSourceByKey = @{}
+$script:IconKeyByIdentity = @{}
 $script:MaxRequestChars = 1048576
 $script:TakeoverUnlocked = $false
+$script:InventoryScanJobs = @{}
+$script:InventoryScanResults = @{}
+$script:InventoryScanError = ''
+$script:InventoryScanStartedAt = $null
+$script:DataDirectory = $PSScriptRoot
 
 function Initialize-ImportExcel {
     $requiredVersion = [version]'7.8.10'
+    $bundledManifest = Join-Path $PSScriptRoot 'Modules\ImportExcel\7.8.10\ImportExcel.psd1'
+    if (Test-Path -LiteralPath $bundledManifest -PathType Leaf) {
+        try {
+            $moduleRoot = [System.IO.Path]::GetDirectoryName($bundledManifest)
+            $integrityPath = Join-Path $moduleRoot 'CONTENT-SHA256.json'
+            if (-not (Test-Path -LiteralPath $integrityPath -PathType Leaf)) { throw '缺少模块完整性清单。' }
+            $parsedIntegrityEntries = Get-Content -LiteralPath $integrityPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+            if ($parsedIntegrityEntries -isnot [System.Array]) { throw '模块完整性清单格式无效。' }
+            [object[]]$integrityEntries = $parsedIntegrityEntries
+            if ($integrityEntries.Count -lt 1 -or $integrityEntries.Count -gt 2000) { throw '模块完整性清单数量无效。' }
+            $moduleRootPrefix = [System.IO.Path]::GetFullPath($moduleRoot).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+            foreach ($entry in $integrityEntries) {
+                $candidate = [System.IO.Path]::GetFullPath((Join-Path $moduleRoot ([string]$entry.path)))
+                if (-not $candidate.StartsWith($moduleRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) { throw '模块完整性清单包含越界路径。' }
+                if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { throw "模块文件缺失：$($entry.path)" }
+                $actualHash = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256 -ErrorAction Stop).Hash
+                if (-not [string]::Equals($actualHash, [string]$entry.sha256, [System.StringComparison]::OrdinalIgnoreCase)) { throw "模块文件校验失败：$($entry.path)" }
+            }
+            Import-Module $bundledManifest -Force -ErrorAction Stop
+            foreach ($commandName in @('Open-ExcelPackage', 'Close-ExcelPackage')) {
+                if ($null -eq (Get-Command $commandName -ErrorAction SilentlyContinue)) { throw "ImportExcel 缺少命令 $commandName" }
+            }
+            return
+        } catch {
+            throw "随包提供的 ImportExcel $requiredVersion 加载失败：$($_.Exception.Message)"
+        }
+    }
     $available = Get-Module -ListAvailable -Name ImportExcel |
         Where-Object { $_.Version -eq $requiredVersion } |
         Select-Object -First 1
@@ -676,6 +713,28 @@ function Get-FileFingerprint {
     return ('{0}|{1}|{2}' -f $item.Length, $item.LastWriteTimeUtc.Ticks, $hash.Hash)
 }
 
+function Enter-WorkbookMutex {
+    param([string]$Path)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { $nameHash = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes(([System.IO.Path]::GetFullPath($Path)).ToLowerInvariant()))) -replace '-', '') }
+    finally { $sha.Dispose() }
+    $mutex = New-Object System.Threading.Mutex($false, ('Local\CheckSentry-Workbook-' + $nameHash))
+    try {
+        if (-not $mutex.WaitOne([TimeSpan]::FromSeconds(15))) { throw '另一个 CheckSentry 实例正在修改清单，请稍后重试。' }
+        return $mutex
+    } catch {
+        $mutex.Dispose()
+        throw
+    }
+}
+
+function Exit-WorkbookMutex {
+    param($Mutex)
+    if ($null -eq $Mutex) { return }
+    try { $Mutex.ReleaseMutex() } catch {}
+    $Mutex.Dispose()
+}
+
 function Remove-UndoSnapshot {
     if ($null -ne $script:LastUndoSnapshot) {
         try {
@@ -731,15 +790,17 @@ function Invoke-WorkbookTransaction {
         [scriptblock]$Operation,
         [switch]$CreateUndo
     )
-    Test-ListFileAvailable -Path $Path
-    $fingerprintBefore = Get-FileFingerprint -Path $Path
+    $workbookMutex = Enter-WorkbookMutex -Path $Path
+    $fingerprintBefore = $null
     $pendingSnapshot = $null
-    if ($CreateUndo) { $pendingSnapshot = New-UndoSnapshotFile -Path $Path }
 
     $directory = [System.IO.Path]::GetDirectoryName($Path)
     $temporaryPath = Join-Path $directory ('.' + [System.IO.Path]::GetFileName($Path) + '.' + [guid]::NewGuid().ToString('N') + '.tmp.xlsx')
     $package = $null
     try {
+        Test-ListFileAvailable -Path $Path
+        $fingerprintBefore = Get-FileFingerprint -Path $Path
+        if ($CreateUndo) { $pendingSnapshot = New-UndoSnapshotFile -Path $Path }
         Copy-Item -LiteralPath $Path -Destination $temporaryPath -ErrorAction Stop
         $package = Open-ExcelPackage -Path $temporaryPath -ErrorAction Stop
         Assert-WorkbookPackageSchema -Package $package
@@ -775,6 +836,7 @@ function Invoke-WorkbookTransaction {
         if ($null -ne $pendingSnapshot -and (Test-Path -LiteralPath $pendingSnapshot -PathType Leaf)) {
             Remove-Item -LiteralPath $pendingSnapshot -Force -ErrorAction SilentlyContinue
         }
+        Exit-WorkbookMutex -Mutex $workbookMutex
     }
 }
 
@@ -808,7 +870,7 @@ function Get-LimitedText {
 }
 
 function Get-TakeoverSettingsPath {
-    return (Join-Path $PSScriptRoot 'CheckSentry.settings.json')
+    return (Join-Path $script:DataDirectory 'CheckSentry.settings.json')
 }
 
 function New-PasswordRecord {
@@ -907,7 +969,7 @@ function Set-TakeoverPasswords {
 }
 
 function Get-CloudSettingsPath {
-    return (Join-Path $PSScriptRoot 'CheckSentry.cloud.json')
+    return (Join-Path $script:DataDirectory 'CheckSentry.cloud.json')
 }
 
 function Read-CloudSettings {
@@ -1286,9 +1348,14 @@ function Get-PackageIdentitySet {
     foreach ($sheetName in $script:AllowedSheets) {
         $worksheet = $Package.Workbook.Worksheets[$sheetName]
         if ($null -eq $worksheet.Dimension) { continue }
+        $headers = Get-ExpectedHeaders -SheetName $sheetName
         for ($row = 2; $row -le $worksheet.Dimension.End.Row; $row++) {
             $identity = Get-WorksheetRowIdentity -Worksheet $worksheet -Row $row -SheetName $sheetName
-            if (-not [string]::IsNullOrWhiteSpace($identity)) { $identitySet[$identity] = $true }
+            if (-not [string]::IsNullOrWhiteSpace($identity)) {
+                $ruleData = [ordered]@{}
+                for ($column = 1; $column -le $headers.Count; $column++) { $ruleData[$headers[$column - 1]] = $worksheet.Cells[$row, $column].Value }
+                $identitySet[$identity] = [PSCustomObject]@{ Sheet = $sheetName; Rule = [PSCustomObject]$ruleData }
+            }
         }
     }
     return $identitySet
@@ -1383,10 +1450,13 @@ function Add-RuleToPackage {
 }
 
 function Test-VersionMatch {
-    param([string]$InstalledVersion, [string]$RuleVersion)
+    param([object]$InstalledVersion, [string]$RuleVersion)
     if ([string]::IsNullOrWhiteSpace($RuleVersion)) { return $true }
-    if ([string]::IsNullOrWhiteSpace($InstalledVersion)) { return $false }
-    return $InstalledVersion -like $RuleVersion
+    foreach ($candidate in @($InstalledVersion)) {
+        $candidateText = [string]$candidate
+        if (-not [string]::IsNullOrWhiteSpace($candidateText) -and $candidateText -like $RuleVersion) { return $true }
+    }
+    return $false
 }
 
 function Test-NameMatch {
@@ -1417,9 +1487,44 @@ function Test-PublisherMatch {
     return $InstalledPublisher.IndexOf($publisher, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
 }
 
-function Find-FirstMatchingRule {
-    param($Rules, [string]$ItemType, [string]$DisplayName, [string]$Publisher, [string]$ExtensionId, [string]$Version, [switch]$IgnoreVersion)
+function New-RuleMatcher {
+    param($Rules, [string]$ItemType)
+    $exactNames = @{}
+    $extensionIds = @{}
+    $fallback = @()
+    $order = 0
     foreach ($rule in @($Rules)) {
+        $entry = [PSCustomObject]@{ Order = $order; Rule = $rule }
+        $order++
+        $ruleType = if ([string]::IsNullOrWhiteSpace([string]$rule.'类型')) { '软件' } else { [string]$rule.'类型' }
+        if ($ruleType -ne $ItemType) { continue }
+        $matchType = [string]$rule.'匹配方式'
+        if ($matchType -eq '插件ID精确') {
+            $key = ([string]$rule.'插件ID').Trim()
+            if (-not $extensionIds.ContainsKey($key)) { $extensionIds[$key] = @() }
+            $extensionIds[$key] = @($extensionIds[$key]) + $entry
+        } elseif ($matchType -eq '精确') {
+            $key = ([string]$rule.'软件名关键词').Trim()
+            if (-not $exactNames.ContainsKey($key)) { $exactNames[$key] = @() }
+            $exactNames[$key] = @($exactNames[$key]) + $entry
+        } else {
+            $fallback += $entry
+        }
+    }
+    return [PSCustomObject]@{ IsRuleMatcher = $true; ExactNames = $exactNames; ExtensionIds = $extensionIds; Fallback = $fallback }
+}
+
+function Find-FirstMatchingRule {
+    param($Rules, [string]$ItemType, [string]$DisplayName, [string]$Publisher, [string]$ExtensionId, [object]$Version, [switch]$IgnoreVersion)
+    $candidateRules = @($Rules)
+    if ($null -ne $Rules -and $Rules.IsRuleMatcher -eq $true) {
+        $candidateEntries = @()
+        if (-not [string]::IsNullOrWhiteSpace($ExtensionId) -and $Rules.ExtensionIds.ContainsKey($ExtensionId)) { $candidateEntries += @($Rules.ExtensionIds[$ExtensionId]) }
+        if ($Rules.ExactNames.ContainsKey($DisplayName)) { $candidateEntries += @($Rules.ExactNames[$DisplayName]) }
+        $candidateEntries += @($Rules.Fallback)
+        $candidateRules = @($candidateEntries | Sort-Object Order | ForEach-Object { $_.Rule })
+    }
+    foreach ($rule in $candidateRules) {
         $ruleType = if ([string]::IsNullOrWhiteSpace([string]$rule.'类型')) { '软件' } else { [string]$rule.'类型' }
         if ($ruleType -ne $ItemType) { continue }
         $testName = if ($rule.'匹配方式' -eq '插件ID精确') { $ExtensionId } else { $DisplayName }
@@ -1436,22 +1541,23 @@ function New-ComplianceItem {
     $isSoftware = $ItemType -eq '软件'
     $iconPath = if ($isSoftware) { [string]$Source.图标路径 } else { [string]$Source.IconPath }
     $iconIndex = if ($isSoftware) { [int]$Source.图标索引 } else { 0 }
-    $reportIconDataUri = ''
-    if (-not [string]::IsNullOrWhiteSpace($iconPath)) {
-        $reportIconDataUri = Get-LocalIconDataUri -Path $iconPath -IconIndex $iconIndex
-        $displayName = if ($isSoftware) { [string]$Source.名称 } else { [string]$Source.Name }
-        $extensionId = if ($isSoftware) { '' } else { [string]$Source.ExtensionId }
-        $reportIconKey = '{0}|{1}|{2}' -f $ItemType, $displayName.ToLowerInvariant(), $extensionId.ToLowerInvariant()
-        if (-not [string]::IsNullOrWhiteSpace($reportIconDataUri)) {
-            $script:ReportIconData[$reportIconKey] = [PSCustomObject]@{ ItemType = $ItemType; Name = $displayName; Publisher = if ($isSoftware) { [string]$Source.发布者 } else { [string]$Source.Publisher }; ExtensionId = $extensionId; DataUri = $reportIconDataUri }
-        }
+    $displayName = if ($isSoftware) { [string]$Source.名称 } else { [string]$Source.Name }
+    $extensionId = if ($isSoftware) { '' } else { [string]$Source.ExtensionId }
+    $iconIdentity = '{0}|{1}|{2}' -f $ItemType, $displayName.ToLowerInvariant(), $extensionId.ToLowerInvariant()
+    if ($script:IconKeyByIdentity.ContainsKey($iconIdentity)) {
+        $lazyIconKey = [string]$script:IconKeyByIdentity[$iconIdentity]
+    } else {
+        $lazyIconKey = New-RandomToken -ByteCount 12
+        $script:IconKeyByIdentity[$iconIdentity] = $lazyIconKey
+        $script:IconSourceByKey[$lazyIconKey] = [PSCustomObject]@{ ItemType = $ItemType; Source = $Source; Path = $iconPath; Index = $iconIndex; DataUri = '' }
     }
-    if ($null -ne $MatchedRule -and -not [string]::IsNullOrWhiteSpace($iconPath)) {
+    $script:ReportIconData[$iconIdentity] = [PSCustomObject]@{ ItemType = $ItemType; Name = $displayName; Publisher = if ($isSoftware) { [string]$Source.发布者 } else { [string]$Source.Publisher }; ExtensionId = $extensionId; IconKey = $lazyIconKey }
+    if ($null -ne $MatchedRule) {
         $ruleType = if ([string]::IsNullOrWhiteSpace([string]$MatchedRule.'类型')) { $ItemType } else { [string]$MatchedRule.'类型' }
         $ruleIdentity = Get-RuleIdentity -ItemType $ruleType -ExtensionId ([string]$MatchedRule.'插件ID') -NamePattern ([string]$MatchedRule.'软件名关键词')
-        $script:RuleIconCache[$ruleIdentity] = [PSCustomObject]@{ Path = $iconPath; Index = $iconIndex; DataUri = $reportIconDataUri }
-        if (-not [string]::IsNullOrWhiteSpace([string]$MatchedRule.id) -and -not [string]::IsNullOrWhiteSpace($reportIconDataUri)) {
-            $script:RuleIconDataById[[string]$MatchedRule.id] = $reportIconDataUri
+        $script:RuleIconCache[$ruleIdentity] = [PSCustomObject]@{ Path = $iconPath; Index = $iconIndex; DataUri = ''; IconKey = $lazyIconKey }
+        if (-not [string]::IsNullOrWhiteSpace([string]$MatchedRule.id)) {
+            $script:RuleIconDataById[[string]$MatchedRule.id] = $lazyIconKey
         }
     }
     return [PSCustomObject]@{
@@ -1468,7 +1574,8 @@ function New-ComplianceItem {
         Locations = if ($isSoftware) { $null } else { $Source.Locations }
         图标路径 = $iconPath
         图标索引 = $iconIndex
-        图标数据 = $reportIconDataUri
+        图标数据 = ''
+        图标键 = $lazyIconKey
         MatchedSheet = $MatchedSheet
         MatchedRule = $MatchedRule
         MatchedRuleId = if ($null -ne $MatchedRule) { $MatchedRule.id } else { $null }
@@ -1478,13 +1585,16 @@ function New-ComplianceItem {
 function Get-ComplianceResult {
     param($Installed, $BlackRules, $WhiteRules, $PendingRules, [string]$ItemType)
     $results = @()
+    $blackMatcher = New-RuleMatcher -Rules $BlackRules -ItemType $ItemType
+    $whiteMatcher = New-RuleMatcher -Rules $WhiteRules -ItemType $ItemType
+    $pendingMatcher = New-RuleMatcher -Rules $PendingRules -ItemType $ItemType
     foreach ($item in @($Installed)) {
         $displayName = if ($ItemType -eq '软件') { [string]$item.名称 } else { [string]$item.Name }
         $publisher = if ($ItemType -eq '软件') { [string]$item.发布者 } else { [string]$item.Publisher }
-        $version = if ($ItemType -eq '软件') { [string]$item.版本 } else { [string]$item.Version }
+        $version = if ($ItemType -eq '软件') { [string]$item.版本 } elseif ($null -ne $item.Versions) { @($item.Versions) } else { [string]$item.Version }
         $extensionId = if ($ItemType -eq '软件') { '' } else { [string]$item.ExtensionId }
 
-        $black = Find-FirstMatchingRule -Rules $BlackRules -ItemType $ItemType -DisplayName $displayName -Publisher $publisher -ExtensionId $extensionId -Version $version
+        $black = Find-FirstMatchingRule -Rules $blackMatcher -ItemType $ItemType -DisplayName $displayName -Publisher $publisher -ExtensionId $extensionId -Version $version
         if ($null -ne $black) {
             $reason = Get-UserNoteText $black.'备注/原因'
             $results += New-ComplianceItem -Source $item -ItemType $ItemType -Status '命中黑名单' -Reason $reason -MatchedRule $black -MatchedSheet '黑名单'
@@ -1492,20 +1602,20 @@ function Get-ComplianceResult {
             continue
         }
 
-                $white = Find-FirstMatchingRule -Rules $WhiteRules -ItemType $ItemType -DisplayName $displayName -Publisher $publisher -ExtensionId $extensionId -Version $version
+        $white = Find-FirstMatchingRule -Rules $whiteMatcher -ItemType $ItemType -DisplayName $displayName -Publisher $publisher -ExtensionId $extensionId -Version $version
         if ($null -ne $white) {
             $reason = Get-UserNoteText $white.'备注/原因'
             $results += New-ComplianceItem -Source $item -ItemType $ItemType -Status '已匹配' -Reason $reason -MatchedRule $white -MatchedSheet '白名单'
             continue
         }
         # 如果找不到精确匹配版本的白名单，尝试寻找名称匹配但版本不限/不匹配的规则，标记为“版本变化”
-        $whiteAnyVersion = Find-FirstMatchingRule -Rules $WhiteRules -ItemType $ItemType -DisplayName $displayName -Publisher $publisher -ExtensionId $extensionId -Version $version -IgnoreVersion
+        $whiteAnyVersion = Find-FirstMatchingRule -Rules $whiteMatcher -ItemType $ItemType -DisplayName $displayName -Publisher $publisher -ExtensionId $extensionId -Version $version -IgnoreVersion
         if ($null -ne $whiteAnyVersion) {
             $results += New-ComplianceItem -Source $item -ItemType $ItemType -Status '版本变化' -Reason '' -MatchedRule $whiteAnyVersion -MatchedSheet '白名单'
             continue
         }
 
-        $pending = Find-FirstMatchingRule -Rules $PendingRules -ItemType $ItemType -DisplayName $displayName -Publisher $publisher -ExtensionId $extensionId -Version $version
+        $pending = Find-FirstMatchingRule -Rules $pendingMatcher -ItemType $ItemType -DisplayName $displayName -Publisher $publisher -ExtensionId $extensionId -Version $version
         if ($null -ne $pending) {
             $reason = Get-UserNoteText $pending.'备注/原因'
             $results += New-ComplianceItem -Source $item -ItemType $ItemType -Status '待定' -Reason $reason -MatchedRule $pending -MatchedSheet '待定'
@@ -1554,7 +1664,7 @@ function Add-NewPendingRules {
             $item.MatchedRule = $rule
             $item.MatchedRuleId = [string]$newId
             $item.MatchedSheet = "待定"
-            $existingIdentities[$identity] = $true
+            $existingIdentities[$identity] = [PSCustomObject]@{ Sheet = '待定'; Rule = $rule }
             $added++
         }
         return $added
@@ -1613,22 +1723,116 @@ function Clear-SystemGeneratedRuleNotes {
 }
 
 function Get-InventoryData {
-
     param([switch]$ForceRefresh, [switch]$IncludeSystem)
-        if (-not $ForceRefresh -and $null -ne $script:InventoryCache) {
+    if ($ForceRefresh) {
+        Start-InventoryScanJobs -IncludeSystem:$IncludeSystem -IncludeInactive:$IncludeInactiveExtensions -AllUsers:$ScanAllUsers
+    }
+    if (-not $ForceRefresh -and $null -ne $script:InventoryCache) {
         return $script:InventoryCache
     }
-    if ($ForceRefresh -and $null -ne $script:RuleIconCache) { $script:RuleIconCache.Clear() }
-    if ($ForceRefresh -and $null -ne $script:RuleIconDataById) { $script:RuleIconDataById.Clear() }
-    if ($ForceRefresh -and $null -ne $script:ReportIconData) { $script:ReportIconData.Clear() }
-    $script:InventoryCache = [PSCustomObject]@{
-
-        Software = @(Get-InstalledSoftwareList -IncludeSystemComponents:$IncludeSystem)
-        Chromium = @(Get-ChromiumExtensions)
-        Firefox = @(Get-FirefoxExtensions)
-        CreatedAt = Get-Date
+    if ($script:InventoryScanJobs.Count -eq 0) {
+        Start-InventoryScanJobs -IncludeSystem:$IncludeSystem -IncludeInactive:$IncludeInactiveExtensions -AllUsers:$ScanAllUsers
     }
+    while ($null -eq $script:InventoryCache -and [string]::IsNullOrWhiteSpace($script:InventoryScanError)) {
+        $null = Update-InventoryScanState
+        if ($null -eq $script:InventoryCache) { Start-Sleep -Milliseconds 100 }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($script:InventoryScanError)) { throw $script:InventoryScanError }
     return $script:InventoryCache
+}
+
+function Stop-InventoryScanJobs {
+    foreach ($entry in @($script:InventoryScanJobs.Values)) {
+        $job = $entry.Job
+        if ($null -eq $job) { continue }
+        try { if ($job.State -in @('Running', 'NotStarted')) { Stop-Job -Job $job -ErrorAction SilentlyContinue } } catch {}
+        try { Remove-Job -Job $job -Force -ErrorAction SilentlyContinue } catch {}
+    }
+    $script:InventoryScanJobs = @{}
+}
+
+function Start-InventoryScanJobs {
+    param([switch]$IncludeSystem, [switch]$IncludeInactive, [switch]$AllUsers)
+    Stop-InventoryScanJobs
+    $script:InventoryCache = $null
+    $script:InventoryScanResults = @{}
+    $script:InventoryScanError = ''
+    $script:InventoryScanStartedAt = Get-Date
+    foreach ($cache in @($script:RuleIconCache, $script:RuleIconDataById, $script:ReportIconData, $script:IconSourceByKey, $script:IconKeyByIdentity)) {
+        if ($null -ne $cache) { $cache.Clear() }
+    }
+    $rootPath = $PSScriptRoot
+    $specifications = @(
+        [PSCustomObject]@{ Kind = 'Software'; Script = {
+            param($RootPath, $IncludeSystemValue, $IncludeInactiveValue, $AllUsersValue)
+            . (Join-Path $RootPath 'Get-InstalledSoftware.ps1')
+            [PSCustomObject]@{ Kind = 'Software'; Items = @(Get-InstalledSoftwareList -IncludeSystemComponents:$IncludeSystemValue -AllUsers:$AllUsersValue) }
+        } },
+        [PSCustomObject]@{ Kind = 'Chromium'; Script = {
+            param($RootPath, $IncludeSystemValue, $IncludeInactiveValue, $AllUsersValue)
+            . (Join-Path $RootPath 'Get-InstalledExtensions.ps1')
+            [PSCustomObject]@{ Kind = 'Chromium'; Items = @(Get-ChromiumExtensions -IncludeInactive:$IncludeInactiveValue) }
+        } },
+        [PSCustomObject]@{ Kind = 'Firefox'; Script = {
+            param($RootPath, $IncludeSystemValue, $IncludeInactiveValue, $AllUsersValue)
+            . (Join-Path $RootPath 'Get-InstalledExtensions.ps1')
+            [PSCustomObject]@{ Kind = 'Firefox'; Items = @(Get-FirefoxExtensions -IncludeInactive:$IncludeInactiveValue) }
+        } }
+    )
+    foreach ($specification in $specifications) {
+        try {
+            $job = Start-Job -ScriptBlock $specification.Script -ArgumentList @($rootPath, $IncludeSystem.IsPresent, $IncludeInactive.IsPresent, $AllUsers.IsPresent) -ErrorAction Stop
+            $script:InventoryScanJobs[$specification.Kind] = [PSCustomObject]@{ Job = $job; Received = $false }
+        } catch {
+            Stop-InventoryScanJobs
+            $script:InventoryScanError = "无法启动后台扫描：$($_.Exception.Message)"
+            break
+        }
+    }
+}
+
+function Update-InventoryScanState {
+    if ($null -ne $script:InventoryCache) { return $true }
+    foreach ($kind in @($script:InventoryScanJobs.Keys)) {
+        $entry = $script:InventoryScanJobs[$kind]
+        if ($entry.Received) { continue }
+        $job = $entry.Job
+        if ($job.State -eq 'Failed') {
+            $reason = if ($null -ne $job.ChildJobs[0].JobStateInfo.Reason) { $job.ChildJobs[0].JobStateInfo.Reason.Message } else { '未知错误' }
+            $script:InventoryScanError = "$kind 扫描失败：$reason"
+            return $false
+        }
+        if ($job.State -eq 'Completed') {
+            try {
+                $payload = @(Receive-Job -Job $job -ErrorAction Stop) | Select-Object -Last 1
+                if ($null -eq $payload -or [string]$payload.Kind -ne $kind) { throw '后台扫描没有返回有效结果。' }
+                $script:InventoryScanResults[$kind] = @($payload.Items)
+                $entry.Received = $true
+            } catch {
+                $script:InventoryScanError = "$kind 扫描结果读取失败：$($_.Exception.Message)"
+                return $false
+            }
+        }
+    }
+    if ($script:InventoryScanJobs.Count -eq 3 -and @($script:InventoryScanJobs.Values | Where-Object { -not $_.Received }).Count -eq 0) {
+        $script:InventoryCache = [PSCustomObject]@{
+            Software = @($script:InventoryScanResults.Software)
+            Chromium = @($script:InventoryScanResults.Chromium)
+            Firefox = @($script:InventoryScanResults.Firefox)
+            CreatedAt = Get-Date
+        }
+        Stop-InventoryScanJobs
+        return $true
+    }
+    return $false
+}
+
+function Get-InventoryScanStatus {
+    $ready = Update-InventoryScanState
+    $completed = @($script:InventoryScanJobs.Values | Where-Object { $_.Received }).Count
+    if ($ready) { $completed = 3 }
+    $elapsed = if ($null -ne $script:InventoryScanStartedAt) { [Math]::Round(((Get-Date) - $script:InventoryScanStartedAt).TotalSeconds, 1) } else { 0 }
+    return [PSCustomObject]@{ Ready = $ready; Completed = $completed; Total = 3; Error = $script:InventoryScanError; ElapsedSeconds = $elapsed }
 }
 
 function Initialize-NativeIconApi {
@@ -1727,47 +1931,9 @@ function Get-LocalIconDataUri {
 
 function Get-RuleIconDataUri {
     param($Rule, [bool]$IncludeSystem)
-    $ruleId = [string]$Rule.id
-    if (-not [string]::IsNullOrWhiteSpace($ruleId) -and $script:RuleIconDataById.ContainsKey($ruleId)) {
-        $idUri = [string]$script:RuleIconDataById[$ruleId]
-        if (-not [string]::IsNullOrWhiteSpace($idUri)) { return $idUri }
-    }
-    $itemType = if ([string]::IsNullOrWhiteSpace([string]$Rule.'类型')) { '软件' } else { [string]$Rule.'类型' }
-    $ruleIdentity = Get-RuleIdentity -ItemType $itemType -ExtensionId ([string]$Rule.'插件ID') -NamePattern ([string]$Rule.'软件名关键词')
-    foreach ($reportRecord in @($script:ReportIconData.Values)) {
-        if ([string]$reportRecord.ItemType -ne $itemType) { continue }
-        if ($itemType -eq '软件') {
-            if (-not (Test-NameMatch -InstalledName ([string]$reportRecord.Name) -Rule $Rule)) { continue }
-            if (-not (Test-PublisherMatch -InstalledPublisher ([string]$reportRecord.Publisher) -RulePublisher $Rule.'发布者')) { continue }
-            if (-not [string]::IsNullOrWhiteSpace([string]$reportRecord.DataUri)) { return [string]$reportRecord.DataUri }
-        } elseif ([string]::Equals([string]$reportRecord.ExtensionId, [string]$Rule.'插件ID', [System.StringComparison]::OrdinalIgnoreCase)) {
-            if (-not [string]::IsNullOrWhiteSpace([string]$reportRecord.DataUri)) { return [string]$reportRecord.DataUri }
-        }
-    }
-    if ($script:RuleIconCache.ContainsKey($ruleIdentity)) {
-        $cached = $script:RuleIconCache[$ruleIdentity]
-        if (-not [string]::IsNullOrWhiteSpace([string]$cached.DataUri)) { return [string]$cached.DataUri }
-        $cachedUri = Get-LocalIconDataUri -Path ([string]$cached.Path) -IconIndex ([int]$cached.Index)
-        if (-not [string]::IsNullOrWhiteSpace($cachedUri)) { return $cachedUri }
-    }
-    $inventory = Get-InventoryData -IncludeSystem:$IncludeSystem
-
-        $iconPath = ''
-
-    $iconIndex = 0
-    if ($itemType -eq '软件') {
-        $software = $inventory.Software | Where-Object {
-            Test-NameMatch -InstalledName ([string]$_.名称) -Rule $Rule
-        } | Select-Object -First 1
-        if ($null -ne $software) { $iconPath = [string]$software.图标路径; $iconIndex = [int]$software.图标索引 }
-    } else {
-        $extensions = if ($itemType -eq 'Firefox插件') { $inventory.Firefox } else { $inventory.Chromium }
-        $extension = $extensions | Where-Object {
-            [string]::Equals([string]$_.ExtensionId, [string]$Rule.'插件ID', [System.StringComparison]::OrdinalIgnoreCase)
-        } | Select-Object -First 1
-        if ($null -ne $extension) { $iconPath = [string]$extension.IconPath }
-    }
-    return Get-LocalIconDataUri -Path $iconPath -IconIndex $iconIndex
+    $key = Get-RuleIconKey -Rule $Rule
+    if ([string]::IsNullOrWhiteSpace($key)) { return '' }
+    return Get-IconDataUriByKey -Key $key
 }
 
 function Prime-RuleIconCacheFromReport {
@@ -1780,6 +1946,47 @@ function Prime-RuleIconCacheFromReport {
     $null = @(Get-ComplianceResult -Installed $Inventory.Firefox -BlackRules $black -WhiteRules $white -PendingRules $pending -ItemType 'Firefox插件')
 }
 
+function Get-RuleIconKey {
+    param($Rule)
+    $ruleId = [string]$Rule.id
+    if (-not [string]::IsNullOrWhiteSpace($ruleId) -and $script:RuleIconDataById.ContainsKey($ruleId)) {
+        return [string]$script:RuleIconDataById[$ruleId]
+    }
+    $itemType = if ([string]::IsNullOrWhiteSpace([string]$Rule.'类型')) { '软件' } else { [string]$Rule.'类型' }
+    foreach ($reportRecord in @($script:ReportIconData.Values)) {
+        if ([string]$reportRecord.ItemType -ne $itemType) { continue }
+        if ($itemType -eq '软件') {
+            if (-not (Test-NameMatch -InstalledName ([string]$reportRecord.Name) -Rule $Rule)) { continue }
+            if (-not (Test-PublisherMatch -InstalledPublisher ([string]$reportRecord.Publisher) -RulePublisher $Rule.'发布者')) { continue }
+            return [string]$reportRecord.IconKey
+        }
+        if ([string]::Equals([string]$reportRecord.ExtensionId, [string]$Rule.'插件ID', [System.StringComparison]::OrdinalIgnoreCase)) {
+            return [string]$reportRecord.IconKey
+        }
+    }
+    return ''
+}
+
+function Get-IconDataUriByKey {
+    param([string]$Key)
+    if ($Key -notmatch '^[a-f0-9]{24}$' -or -not $script:IconSourceByKey.ContainsKey($Key)) { return '' }
+    $record = $script:IconSourceByKey[$Key]
+    if (-not [string]::IsNullOrWhiteSpace([string]$record.DataUri)) { return [string]$record.DataUri }
+    $path = [string]$record.Path
+    $index = [int]$record.Index
+    if ([string]$record.ItemType -eq '软件' -and ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path -PathType Leaf))) {
+        $reference = Resolve-InstalledSoftwareIconReference -Item $record.Source
+        if ($null -ne $reference) {
+            $path = [string]$reference.Path
+            $index = [int]$reference.Index
+            $record.Path = $path
+            $record.Index = $index
+        }
+    }
+    $record.DataUri = Get-LocalIconDataUri -Path $path -IconIndex $index
+    return [string]$record.DataUri
+}
+
 function Convert-RulesForWeb {
     param([object[]]$Rules, [bool]$IncludeSystem)
 
@@ -1787,7 +1994,8 @@ function Convert-RulesForWeb {
     foreach ($rule in @($Rules)) {
         $ordered = [ordered]@{}
         foreach ($property in $rule.PSObject.Properties) { $ordered[$property.Name] = $property.Value }
-        $ordered['图标数据'] = Get-RuleIconDataUri -Rule $rule -IncludeSystem $IncludeSystem
+        $ordered['图标数据'] = ''
+        $ordered['图标键'] = Get-RuleIconKey -Rule $rule
         $output += [PSCustomObject]$ordered
     }
     return $output
@@ -1834,9 +2042,10 @@ function Get-RowHtml {
     $addedTime = if ($null -ne $matchedRule) { ConvertTo-HtmlEncodedText $matchedRule.'添加时间' } else { '' }
 
     $typeIcon = if ($Item.类型 -eq '软件') { '&#128187;' } elseif ($Item.类型 -eq 'Chromium插件') { '&#127760;' } else { '&#129418;' }
-        $iconSource = if (-not [string]::IsNullOrWhiteSpace([string]$Item.图标数据)) { [string]$Item.图标数据 } else { Get-LocalIconDataUri -Path ([string]$Item.图标路径) -IconIndex ([int]$Item.图标索引) }
-
-    $iconHtml = if ($iconSource) { "<img class='item-icon' src='$(ConvertTo-HtmlEncodedText $iconSource)' alt='' loading='lazy'><span class='type-fallback hidden'>$typeIcon</span>" } else { "<span class='type-fallback'>$typeIcon</span>" }
+    $iconKey = ConvertTo-HtmlEncodedText $Item.图标键
+    $iconHtml = if (-not [string]::IsNullOrWhiteSpace([string]$Item.图标键)) {
+        "<img class='item-icon lazy-checksentry-icon hidden' data-icon-key='$iconKey' alt='' loading='lazy'><span class='type-fallback'>$typeIcon</span>"
+    } else { "<span class='type-fallback'>$typeIcon</span>" }
 
     $locationText = ''
     if ($Item.类型 -eq '软件') {
@@ -2067,6 +2276,16 @@ function Write-RuleChange {
     return Invoke-WorkbookTransaction -Path $Path -Operation $operation -CreateUndo
 }
 
+function Get-ScanLoadingHtml {
+    param([string]$Nonce)
+    $html = @'
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CheckSentry 正在扫描</title>
+<style>body{margin:0;background:#f4f7fb;color:#1f2937;font-family:"Microsoft YaHei",Segoe UI,sans-serif;display:grid;place-items:center;min-height:100vh}.card{width:min(520px,86vw);background:white;border-radius:18px;padding:34px;box-shadow:0 18px 50px rgba(15,23,42,.12)}h1{font-size:24px;margin:0 0 12px}.bar{height:12px;background:#e5e7eb;border-radius:999px;overflow:hidden;margin:24px 0 14px}.fill{height:100%;width:8%;background:linear-gradient(90deg,#2563eb,#22c55e);transition:width .35s}.muted{color:#64748b;font-size:14px}.error{color:#b91c1c;white-space:pre-wrap}</style></head><body><main class="card"><h1>正在核对这台电脑</h1><div class="muted" id="status">软件、Chromium 插件和 Firefox 插件正在后台扫描。</div><div class="bar"><div class="fill" id="fill"></div></div><div class="muted" id="elapsed">请稍候，页面会自动进入报告。</div></main>
+<script nonce="__NONCE__">async function poll(){try{const r=await fetch('/api/scan-status',{cache:'no-store'});const d=await r.json();if(d.Error){document.getElementById('status').className='error';document.getElementById('status').textContent=d.Error;return;}const percent=Math.max(8,Math.round((d.Completed/d.Total)*100));document.getElementById('fill').style.width=percent+'%';document.getElementById('status').textContent='已完成 '+d.Completed+' / '+d.Total+' 个扫描源';document.getElementById('elapsed').textContent='已用时 '+d.ElapsedSeconds+' 秒';if(d.Ready){location.replace('/');return;}}catch(e){document.getElementById('status').textContent='正在连接本地扫描服务…';}setTimeout(poll,500)}poll();</script></body></html>
+'@
+    return $html.Replace('__NONCE__', (ConvertTo-HtmlEncodedText $Nonce))
+}
+
 function Show-RuleConflictWarnings {
     param([string]$Path)
     $entries = @()
@@ -2111,6 +2330,7 @@ function Start-ReportServer {
     Write-Host "报告服务已启动：$url" -ForegroundColor Green
     if ($actualPort -ne $RequestedPort) { Write-Host "端口 $RequestedPort 已占用，已自动改用 $actualPort。" -ForegroundColor Yellow }
     Write-Host '关闭此窗口即可停止工具。' -ForegroundColor DarkGray
+    Start-InventoryScanJobs -IncludeSystem:$IncludeSystem -IncludeInactive:$IncludeInactiveExtensions -AllUsers:$ScanAllUsers
     try { Start-Process $url -ErrorAction Stop } catch { Write-Host "无法自动打开浏览器，请手动访问：$url" -ForegroundColor Yellow }
 
     try {
@@ -2120,7 +2340,13 @@ function Start-ReportServer {
             $response = $context.Response
             try {
                 $route = $request.Url.AbsolutePath
-                if ($request.HttpMethod -eq 'GET' -and $route -eq '/manage') {
+                if ($request.HttpMethod -eq 'GET' -and $route -eq '/api/scan-status') {
+                    Write-JsonResponse -Response $response -Object (Get-InventoryScanStatus) -StatusCode 200 -Nonce $nonce
+                } elseif ($request.HttpMethod -eq 'GET' -and $route -eq '/api/icon') {
+                    $iconKey = [string]$request.QueryString['key']
+                    $iconDataUri = Get-IconDataUriByKey -Key $iconKey
+                    Write-JsonResponse -Response $response -Object @{ ok = (-not [string]::IsNullOrWhiteSpace($iconDataUri)); dataUri = $iconDataUri } -StatusCode 200 -Nonce $nonce
+                } elseif ($request.HttpMethod -eq 'GET' -and $route -eq '/manage') {
                     $template = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'management_template.html') -Raw -Encoding UTF8
                     $template = $template.Replace('__CSRF_TOKEN__', (ConvertTo-HtmlEncodedText $csrfToken)).Replace('__CSP_NONCE__', (ConvertTo-HtmlEncodedText $nonce))
                     Write-HtmlResponse -Response $response -Html $template -StatusCode 200 -Nonce $nonce
@@ -2148,8 +2374,15 @@ function Start-ReportServer {
                         } catch {
                             Write-Host "重新扫描：云端规则同步已跳过（$($_.Exception.Message)）" -ForegroundColor Yellow
                         }
+                        Start-InventoryScanJobs -IncludeSystem:$IncludeSystem -IncludeInactive:$IncludeInactiveExtensions -AllUsers:$ScanAllUsers
                     }
-                    $inventory = Get-InventoryData -ForceRefresh:$forceRefresh -IncludeSystem:$IncludeSystem
+                    $scanStatus = Get-InventoryScanStatus
+                    if (-not $scanStatus.Ready) {
+                        if (-not [string]::IsNullOrWhiteSpace([string]$scanStatus.Error)) { throw [string]$scanStatus.Error }
+                        Write-HtmlResponse -Response $response -Html (Get-ScanLoadingHtml -Nonce $nonce) -StatusCode 200 -Nonce $nonce
+                        continue
+                    }
+                    $inventory = Get-InventoryData -IncludeSystem:$IncludeSystem
                     $allRules = Import-AllRuleSheets -Path $Path
                     $black = @($allRules.'黑名单')
                     $white = @($allRules.'白名单')
@@ -2319,6 +2552,7 @@ function Start-ReportServer {
         }
     } finally {
         Remove-UndoSnapshot
+        Stop-InventoryScanJobs
         if ($null -ne $listener) {
             try { $listener.Stop() } catch { Write-Verbose "停止 HTTP 监听器失败：$($_.Exception.Message)" }
             try { $listener.Close() } catch { Write-Verbose "关闭 HTTP 监听器失败：$($_.Exception.Message)" }
@@ -2326,6 +2560,7 @@ function Start-ReportServer {
     }
 }
 
+if (-not $LibraryOnly) {
 try {
     Initialize-ImportExcel
     . (Join-Path $PSScriptRoot 'Get-InstalledSoftware.ps1')
@@ -2338,6 +2573,7 @@ try {
     if ([string]::Equals($ListPath, $templatePath, [StringComparison]::OrdinalIgnoreCase)) { throw '不能把 list_template.xlsx 直接作为运行清单，请使用 list.xlsx。' }
     $parentDirectory = [System.IO.Path]::GetDirectoryName($ListPath)
     if (-not (Test-Path -LiteralPath $parentDirectory -PathType Container)) { throw "清单所在目录不存在：$parentDirectory" }
+    $script:DataDirectory = $parentDirectory
     if (-not (Test-Path -LiteralPath $ListPath -PathType Leaf)) {
         if (-not (Test-Path -LiteralPath $templatePath -PathType Leaf)) { throw '找不到 list_template.xlsx。' }
         Ensure-WorkbookCompatibility -Path $templatePath
@@ -2363,4 +2599,5 @@ try {
 } catch {
     Write-Host "CheckSentry 启动失败：$($_.Exception.Message)" -ForegroundColor Red
     exit 1
+}
 }

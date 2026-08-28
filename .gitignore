@@ -17,3 +17,8 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# Build output
+dist/
+launcher/bin/
+launcher/obj/

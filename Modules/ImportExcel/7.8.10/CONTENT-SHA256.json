@@ -1,0 +1,854 @@
+[
+  {
+    "path": "Add-Subtotals.ps1",
+    "sha256": "e54f6309b3dfb04f54aedec2cfee7e19096a07d02722e1baf045928390f9f8d0"
+  },
+  {
+    "path": "Charting/Charting.ps1",
+    "sha256": "013b3e8dc36ab76e66cfaefe5ed1b06639bcca92586e229c598517818255fa7b"
+  },
+  {
+    "path": "en/Strings.psd1",
+    "sha256": "138d2ec176ac54db6181c9c9c8c96aefe42f2ed4b8875e06766098e8c990682b"
+  },
+  {
+    "path": "EPPlus.dll",
+    "sha256": "c32cefbd1ea051ed3af06e7fb9dd558598a612f042164140cd8be722a351bc63"
+  },
+  {
+    "path": "Examples/AddImage/Add-ExcelImage.ps1",
+    "sha256": "35b676db56205c0df9d1797bc6039f309adf27e8dd72a75334a0757ea167d762"
+  },
+  {
+    "path": "Examples/AddImage/AddImage.ps1",
+    "sha256": "f5abdb2ca02c5e377a716ee21c7d0fa3a70240c30e3e8267a075ff5bff282b49"
+  },
+  {
+    "path": "Examples/AddWorkSheet/AddMultiWorkSheet.ps1",
+    "sha256": "95443826f2a4c3ea4ddad2d427e442c2be3ec688e1634c8714092ebdf2791df3"
+  },
+  {
+    "path": "Examples/AddWorkSheet/AddWorkSheet.ps1",
+    "sha256": "58ad9cc8c6e1b5e10fe3f14eb35af85d595ac67064855441cc35d1adcd0452d8"
+  },
+  {
+    "path": "Examples/Charts/ChartAndTrendlines.ps1",
+    "sha256": "a5abcf5afebfb461494c73023317e9aa576af0623a41d1ed35633d23b9298c9a"
+  },
+  {
+    "path": "Examples/Charts/ChartDataSeparatePage.ps1",
+    "sha256": "ed44513ae2685512aab4e83548ff11d27c5d92ce87accf54f489d3a695b92ef4"
+  },
+  {
+    "path": "Examples/Charts/MultipleCharts.ps1",
+    "sha256": "bc0ec5a370ed4c22fe034d2004c1896ad18036ead2d0af93fdc7fc1398272399"
+  },
+  {
+    "path": "Examples/Charts/MultiSeries.ps1",
+    "sha256": "2e379712823d5ebe9731b8ae7d7c2236b5c05b0a3dcd6099fd37069ba66d0a59"
+  },
+  {
+    "path": "Examples/Charts/MultiSeries1.ps1",
+    "sha256": "d2da7abcb20e65357e2d3c28e65dffc640230e24e3c428a0e4e551577de7e0bb"
+  },
+  {
+    "path": "Examples/Charts/NumberOfVisitors.ps1",
+    "sha256": "3a11392cc7d9e6ca49c53d80546fbeb587ba747210763fd90c79c98b479b7900"
+  },
+  {
+    "path": "Examples/Charts/plot.ps1",
+    "sha256": "926405b488f50e5f881620244d4dcedf2d46fd08bd60fc495e0073ceef4f4314"
+  },
+  {
+    "path": "Examples/CommunityContributions/MultipleWorksheets.ps1",
+    "sha256": "eeb2d6f751e6b8ed538948cf917e7fe5472affeaf5d89b18f2631f664ba0fca2"
+  },
+  {
+    "path": "Examples/ConditionalFormatting/CodeGenExamples.ps1",
+    "sha256": "193d2d75b716f8490d96e54d83803a5298559b096721ab3dba2592aa74ab6097"
+  },
+  {
+    "path": "Examples/ConditionalFormatting/ConditionalFormattingIcontSetOnlyIcon.ps1",
+    "sha256": "820ac6d2c401046309948d1b7e1e4e45ec4eddbd14d6c39fd498d85909ba3c28"
+  },
+  {
+    "path": "Examples/ConditionalFormatting/ConditionalText.ps1",
+    "sha256": "a7aaba2c634ef54deffccdedd757a1d30f64bf5c29e24b5a3f01e1b0d2304438"
+  },
+  {
+    "path": "Examples/ConditionalFormatting/ContainsBlanks.ps1",
+    "sha256": "f26f7b16951b91802728d987d3e925d587dd6cd31c0f55148bf58170fd82196f"
+  },
+  {
+    "path": "Examples/ConditionalFormatting/Databar.ps1",
+    "sha256": "dbf9512d1b8fc2ea4226761355f7f36c621f8ea337ce6a84403e578039d5aa18"
+  },
+  {
+    "path": "Examples/ConditionalFormatting/FormatCalculations.ps1",
+    "sha256": "bfb5e87c3c4b3a0ac01eb72a9a199880965e9a88275abc4001969bb737f26173"
+  },
+  {
+    "path": "Examples/ConditionalFormatting/GenDates.ps1",
+    "sha256": "101cc139e618063efbd3a0dbaa7ba9e23f21ab566108b5df066ccf6d3156af9a"
+  },
+  {
+    "path": "Examples/ConditionalFormatting/GetConditionalFormatting.ps1",
+    "sha256": "bd1c955311cccbe0dc1156ab419c0ce0e63e79bbc1214fcdd517f140dafc90ad"
+  },
+  {
+    "path": "Examples/ConditionalFormatting/GetProcess.ps1",
+    "sha256": "ed7bbe258e1c887d6a4d66126e48f43b74124b8b9535e367341aeb4a7a997872"
+  },
+  {
+    "path": "Examples/ConditionalFormatting/Highlight-DiffCells.ps1",
+    "sha256": "edb1b57137ac2bb2891e5f1b9220c20d1ebcd839c8eef4cf1406fb5cd4022c96"
+  },
+  {
+    "path": "Examples/ConditionalFormatting/Highlight-Last7Days.ps1",
+    "sha256": "c54d03c589f43ddede2ae4cdab570f2ce04a33b5eddfe4c698d4b9046ba245ca"
+  },
+  {
+    "path": "Examples/ConditionalFormatting/Highlight-LastMonth.ps1",
+    "sha256": "7cbcd1a327710fc56111496713d97171ec1792165b26123ccb989ca1c5ef5332"
+  },
+  {
+    "path": "Examples/ConditionalFormatting/Highlight-LastWeek.ps1",
+    "sha256": "5999b86bc00a9ff0e4aee8957575a0e06da125dece0c6a137053c8917c04871b"
+  },
+  {
+    "path": "Examples/ConditionalFormatting/Highlight-NextMonth.ps1",
+    "sha256": "0f0143900a07d8068efc5252d91896c17b3cc2cf773d5dde1848559e3dab4f89"
+  },
+  {
+    "path": "Examples/ConditionalFormatting/Highlight-NextWeek.ps1",
+    "sha256": "60e3f8b90760b71ce9b83fb5e82dddb039a7c8281f987be728a8cf18fd129ef9"
+  },
+  {
+    "path": "Examples/ConditionalFormatting/Highlight-ThisMonth.ps1",
+    "sha256": "16eb0d7e912021f2824a4e85ac53f0ed1c3dc28de9a894c38924defe4ab9a02d"
+  },
+  {
+    "path": "Examples/ConditionalFormatting/Highlight-ThisWeek.ps1",
+    "sha256": "0817ca3f920551efba6eb7483ebd40417cdab24b1fa6743889c8aab8f396bda4"
+  },
+  {
+    "path": "Examples/ConditionalFormatting/Highlight-Today.ps1",
+    "sha256": "61041d2a096942dc0f2b9bbb8083eb17d0b32162dbbf5a98ef0c2b9bc67b2944"
+  },
+  {
+    "path": "Examples/ConditionalFormatting/Highlight-Tomorrow.ps1",
+    "sha256": "4c6af6d3c92417d66639bd6a47c2bf046999b06553595c653fae48873ebe1fec"
+  },
+  {
+    "path": "Examples/ConditionalFormatting/Highlight-Yesterday.ps1",
+    "sha256": "beac92cbac5a264e7f7ab28908d05b2f1ff345b2591d5230c0192fffa3cfe0eb"
+  },
+  {
+    "path": "Examples/ConditionalFormatting/HighlightDuplicates.ps1",
+    "sha256": "906687a24e3d1f4237e2b8ec6c1628ad10e4242564a8d93214c612c5c7b24f2e"
+  },
+  {
+    "path": "Examples/ConditionalFormatting/MonthlyTemperatuesDatabar.ps1",
+    "sha256": "27f81c4544a24d43846d24b3a97b04d2b43c15e0b434be85a08ea76d19445d7f"
+  },
+  {
+    "path": "Examples/ConditionalFormatting/RangeFormatting.ps1",
+    "sha256": "515b575d7f7e0ad199c55edfde4c5756bc871649f083f705c82364050b49fea8"
+  },
+  {
+    "path": "Examples/ConditionalFormatting/SalesReportWithDatabar.ps1",
+    "sha256": "a5f00a2aef539e45b6d63da07e8100ef4221d6203300da3edaf4b15310dea2b2"
+  },
+  {
+    "path": "Examples/ConditionalFormatting/TextComparisons.ps1",
+    "sha256": "54af88b18b817711760660b089a06b228a104ca707fed14e3ca66c227ff4714c"
+  },
+  {
+    "path": "Examples/ConditionalFormatting/Top10-DataBar-TwoColorScale.ps1",
+    "sha256": "5ea3796061741c504b1ec6648a74e07477f1dc0489cc462f1f35e89bc36fef07"
+  },
+  {
+    "path": "Examples/ConvertFrom/ConvertFrom.ps1",
+    "sha256": "b47de9b453840ba8af95c4d9b2d11982d92385bf191d2550b89c6db7575db9ee"
+  },
+  {
+    "path": "Examples/CustomizeExportExcel/Out-Excel.ps1",
+    "sha256": "0a2cefbe6bc3904405fdd49a30e94c067fd41f1e6cfcd260d8b26e261a12463f"
+  },
+  {
+    "path": "Examples/CustomNumbers/ShortenNumbers.ps1",
+    "sha256": "730b7ab2664a533635395af9b82c4cbd02bcc39a80d9272d303234f83a827362"
+  },
+  {
+    "path": "Examples/CustomReporting/CustomReport.ps1",
+    "sha256": "c863dcab18cbe96f6970ca54cc9b0893c857c171d2f70f0f7f5814d9bfdc5a86"
+  },
+  {
+    "path": "Examples/ExcelBuiltIns/DSUM.ps1",
+    "sha256": "5b449c5bc3e22bb8079c8763c9b4fb9eb5b3fffe7ebe0beebc15dae8bf7c5753"
+  },
+  {
+    "path": "Examples/ExcelBuiltIns/VLOOKUP.ps1",
+    "sha256": "1df3644d863bcd9c727579a95dc461ec84c54695cdb9f9f60c27c74575d99e4c"
+  },
+  {
+    "path": "Examples/ExcelDataValidation/MutipleValidations.ps1",
+    "sha256": "2d62362140c730bac3749d702038f20dfcc706c65aefeec158b3999ee3dea4cc"
+  },
+  {
+    "path": "Examples/ExcelToSQLInsert/DemoSQLInsert.ps1",
+    "sha256": "d6faec0b9bb373964c039f4c613cce04b04ab36fd90e00db851ee31f65a44585"
+  },
+  {
+    "path": "Examples/Experimental/Export-MultipleExcelSheets.ps1",
+    "sha256": "24c135df6cd82166448d5a7a60c14ae3a693a266b5dca466f8932546a35db27f"
+  },
+  {
+    "path": "Examples/Experimental/tryExportMultipleExcelSheets.ps1",
+    "sha256": "d1e5b9d98ef60c2d09fdee3a477a5ada38ad290978acdb3f28fac8911f8dd4d4"
+  },
+  {
+    "path": "Examples/Extra/Get-ModuleStats.ps1",
+    "sha256": "9568a6ba4b47d903bf33e1d4fd8bd1ac020a231af97008a5f6231b71ccffb6c2"
+  },
+  {
+    "path": "Examples/Fibonacci/ShowFibonacci.ps1",
+    "sha256": "29ceb2ed0dfd473246b237c324b9e4f5bcd07e1c177d505baf80151dd05918ec"
+  },
+  {
+    "path": "Examples/FormatCellStyles/ApplyFormatInScriptBlock.ps1",
+    "sha256": "b78d2c2d48388615cfbcafad94fec6c6cd382b015506ac09a18e5b0163300674"
+  },
+  {
+    "path": "Examples/FormatCellStyles/ApplyStyle.ps1",
+    "sha256": "c1b7974695c6370d3be87bdb2f1b6fc9371b426e89f476fce26a906574d51a26"
+  },
+  {
+    "path": "Examples/FormatCellStyles/PassInScriptBlock.ps1",
+    "sha256": "e44af316fbd42cbac72141daab48a4cead798eea845a01f4a9deed44e17b2d64"
+  },
+  {
+    "path": "Examples/FormatResults/GetAsMarkdownTable.ps1",
+    "sha256": "22e3d230d926cde6e30483f8cc8cb8b29367840b5dcbc033738ac7f158863b37"
+  },
+  {
+    "path": "Examples/FormatResults/GetAsYaml.ps1",
+    "sha256": "fbc4f01d38bd58a2e8cdc1a1b34708228559d5ecd3925e2b8720857e00679a5b"
+  },
+  {
+    "path": "Examples/Freeze/FreezePane.ps1",
+    "sha256": "a81a478fbbaa0b54cd8205ed317caaa2d61400296958e89bef68ea77f87df4bd"
+  },
+  {
+    "path": "Examples/GenerateData/GenDataForCustomReport.ps1",
+    "sha256": "d82072cf3889c6c7f371ffb9b60a3741fde2a5327bd58e07971b615614c17512"
+  },
+  {
+    "path": "Examples/Grouping/GroupDateColumn.ps1",
+    "sha256": "2357306496d38a2462c3a1e3e83d05fc77f237be6cdff5d2e29b55171bde1f4c"
+  },
+  {
+    "path": "Examples/Grouping/GroupDateRow.ps1",
+    "sha256": "edd65405ca0355d35b039c067a50d0155fee738714285861fb4090d6d6b9888e"
+  },
+  {
+    "path": "Examples/Grouping/GroupNumericColumn.ps1",
+    "sha256": "62cf99d130e3ed37b5383f5da4d542c835a4e5735c9685ced5eea9372f613f98"
+  },
+  {
+    "path": "Examples/Grouping/GroupNumericRow.ps1",
+    "sha256": "85828217cd00aef7135532a4cab9034ba77347d9b0273904256d0bf3b44a6593"
+  },
+  {
+    "path": "Examples/Grouping/TimestampBucket.ps1",
+    "sha256": "8b3ee96c9d2290a7d1f3f9777dec197ff1320ca923a4937346333e60e5572cfe"
+  },
+  {
+    "path": "Examples/HyperLinks/Hyperlinks.ps1",
+    "sha256": "2b98c32859a61cdb7f81e291e8c349942e23b656ae46d38b13f93a6f3b26439c"
+  },
+  {
+    "path": "Examples/HyperLinks/Races.ps1",
+    "sha256": "4702a60d3d39d94f39781bc395d89b657618aecfc9e13cea2818aaf8e4b66859"
+  },
+  {
+    "path": "Examples/Import-Excel/ImportMultipleSheetsAsArray.ps1",
+    "sha256": "17fb175e19af60cb640381a608acb9df9f869a260f9d947b656814030fcacad0"
+  },
+  {
+    "path": "Examples/Import-Excel/ImportMultipleSheetsAsHashtable.ps1",
+    "sha256": "a53eb24b40351cf832a64a3fd59eafc90286ea9d4f92cfc12d937e8fec9d81cd"
+  },
+  {
+    "path": "Examples/ImportByColumns/import-by-columns.ps1",
+    "sha256": "e56415f302936fc875a43663f2abfc82d8c0274e1701bc350acda6ae1507b690"
+  },
+  {
+    "path": "Examples/ImportColumns/ImportColumns.ps1",
+    "sha256": "b29c1302ec0accc64637b80354ed5045bc1ce238d51f48204b66ccbea2b57c15"
+  },
+  {
+    "path": "Examples/ImportHtml/DemoGraphics.ps1",
+    "sha256": "dc8a1d46c5858ccf0e072bb5c304cd5cbce07e4d164970a9382f9e6f8b9f79a2"
+  },
+  {
+    "path": "Examples/ImportHtml/PeriodicElements.ps1",
+    "sha256": "268e47d4c3762f76f46e2e905fc4cdcf2deed044fb2c27f16e54851bbc092e2f"
+  },
+  {
+    "path": "Examples/ImportHtml/StarTrek.ps1",
+    "sha256": "7bb022d07a2b6b332e98f7b973161421546e2f6f53f3684a95b0ee5216137731"
+  },
+  {
+    "path": "Examples/Index - Music.ps1",
+    "sha256": "3dc55ed3965afd0136d2636cc92b020a4d5fa0cec6c1163c32057f1dd1234592"
+  },
+  {
+    "path": "Examples/InteractWithOtherModules/Pester/Analyze_that.ps1",
+    "sha256": "f34f79d9c8a673f1c1434bda011146dcb00e9cb5b9c9ef2cfd0152d6eb68252e"
+  },
+  {
+    "path": "Examples/InteractWithOtherModules/ScriptAnalyzer/Analyze_this.ps1",
+    "sha256": "f001fb956ead123b5e38dd0b27e5dda8ec3693b9c3e6b8e70e990fd65ac4e5ed"
+  },
+  {
+    "path": "Examples/InvokeExcelQuery/Examples.ps1",
+    "sha256": "ef98c83b87eb92c1721a5c4b06b8b30136f5b7f25b3b6972bbedbe9b1b0aef05"
+  },
+  {
+    "path": "Examples/JoinWorksheet/Join-worksheet-blocks.sample.ps1",
+    "sha256": "4996ae01c236b67e5ed765f228aa688f567d4292ac6f260e7b295a9cbf959616"
+  },
+  {
+    "path": "Examples/JoinWorksheet/Join-Worksheet.sample.ps1",
+    "sha256": "e648bb1539a25a66e77f239e61da1daf76e4513caea43df809de5254d7b12334"
+  },
+  {
+    "path": "Examples/JoinWorksheet/JoinSalesData.ps1",
+    "sha256": "dc253ef87cefc32fc664eccda09b905748a30ae06eb3b25bc9f04ef8ece5dea6"
+  },
+  {
+    "path": "Examples/JustCharts/CentralLimitTheorem.ps1",
+    "sha256": "0b3c941bafbf99a271f5adb95e3f76bca2d202758475decf2bd3c82e3413ab29"
+  },
+  {
+    "path": "Examples/JustCharts/PieChartHandles.ps1",
+    "sha256": "0b2537d374b7a1f0211ee20c3fec5b7f45409b21edbd5da97c59e9fe9fb703ae"
+  },
+  {
+    "path": "Examples/JustCharts/PieChartPM.ps1",
+    "sha256": "b8685ebbee97161cd15de228ef03b8ac1930ab215f8f435137a4430223580d95"
+  },
+  {
+    "path": "Examples/JustCharts/TargetData.ps1",
+    "sha256": "8d5069014aa807b937640516d9df9a4aa958ec2a8214d822bf4ac9c09ef3280d"
+  },
+  {
+    "path": "Examples/JustCharts/TryBarChart.ps1",
+    "sha256": "78d0519051a911658dfc99ec1ced413a423b380f84437e048b3758c89a7dc449"
+  },
+  {
+    "path": "Examples/JustCharts/TryColumnChart.ps1",
+    "sha256": "d601d0d1ca2549df38597b2691a4a8a491166fb752c4e18597cc1492f12e30e5"
+  },
+  {
+    "path": "Examples/JustCharts/TryPieChart.ps1",
+    "sha256": "6a53ddd897669fba6e4efed2a930945921bb6f2d0c137e38082e683a1866fd57"
+  },
+  {
+    "path": "Examples/MergeWorkSheet/Merge_2_Servers_Services.ps1",
+    "sha256": "f69fd4e44b30af44a79f1fe606bbee23f3d15d9600e7c8814e18ee26c879d606"
+  },
+  {
+    "path": "Examples/MergeWorkSheet/Merge_3_Servers_Services.ps1",
+    "sha256": "8f11914c18cd45f2ae5b0f56228e69f559cea74e3d0996eeb13f37d66c8e6b0b"
+  },
+  {
+    "path": "Examples/MergeWorkSheet/MergeCSV.ps1",
+    "sha256": "0151fb139c0b68ca9b52bbb76bce5e93205d2ba17551de3523f89034f4414838"
+  },
+  {
+    "path": "Examples/MortgageCalculator/MortgageCalculator.ps1",
+    "sha256": "6f46c63d62c7853b3127428e435d2e77b2264ac25ebcd3605bc84ed003859771"
+  },
+  {
+    "path": "Examples/MoveSheets/MoveSheets.ps1",
+    "sha256": "5e1c444d1812e66dbc211cd86d394db942f912e54851579847d38014b574e48e"
+  },
+  {
+    "path": "Examples/Nasa/FireBalls.ps1",
+    "sha256": "a102055cce19b10df712d953b5ef40fdb344d5c4cd37adbc58d6ad3c32cc6336"
+  },
+  {
+    "path": "Examples/New-PSItem.ps1",
+    "sha256": "3bdf50f5a662da9159d2a376076516a0c5b77a31f626343de9ddd024acdc94bc"
+  },
+  {
+    "path": "Examples/NumberFormat/ColorizeNumbers.ps1",
+    "sha256": "a6ce8cc417715b7601b330ff3198f2703762ae1f210291882fb39162534aaf05"
+  },
+  {
+    "path": "Examples/NumberFormat/CurrencyFormat.ps1",
+    "sha256": "ad71b62b026dda85d53be527613f57245ed4620f8f1b69a7ded144a6ca7a721f"
+  },
+  {
+    "path": "Examples/NumberFormat/PercentagFormat.ps1",
+    "sha256": "53fc248a5b6baacfb639307c9fc9715bc9158c2faf887ae4fc4d870b0c8d1210"
+  },
+  {
+    "path": "Examples/NumberFormat/PosNegNumbers.ps1",
+    "sha256": "4c71e1e836ac4b1141b9627daca18a2b201cb0b347df1abe1cdb01e9d2ef3aad"
+  },
+  {
+    "path": "Examples/NumberFormat/Win32LogicalDisk.ps1",
+    "sha256": "dedfc9644916161b1fc816f776b484ae8e8f47ea9754f731aa59d63e7507ed74"
+  },
+  {
+    "path": "Examples/NumberFormat/Win32LogicalDiskFormatted.ps1",
+    "sha256": "98ba716b1ab96eb7148549db2cd496b46874e8a7811adcfc83961e72860a943c"
+  },
+  {
+    "path": "Examples/OpenExcelPackage/EnableFeatures.ps1",
+    "sha256": "1d01e9c9591abfa4198fe474b7bed71abe3208286e8639302dad8690e276019f"
+  },
+  {
+    "path": "Examples/OutTabulator/start-demo.ps1",
+    "sha256": "bf98492881f39a6c66400a726e585d30420bc6e6c120c1f16230140188feb3b7"
+  },
+  {
+    "path": "Examples/OutTabulator/tryConvertFromExcel.ps1",
+    "sha256": "c6d4d229c1ff8d5a8ce43b42b0e14e20a9c763cac3781f5ba7666f172bea078f"
+  },
+  {
+    "path": "Examples/PassThru/TryPassThru.ps1",
+    "sha256": "ea6e1aa47f0f112c342eeb0cf76107f2109a6809dcc555d1205d9170569f41b9"
+  },
+  {
+    "path": "Examples/Pester-To-XLSx.ps1",
+    "sha256": "04d7407ff2395d229b2fb32343df9b5e8da0f66167c34e3e540241246f54a598"
+  },
+  {
+    "path": "Examples/PesterTestReport/Pester test report.ps1",
+    "sha256": "6d6b25f0f2d3efb6437f93f512c6f873437da5aa7439df26e2f7f212d49d2f3a"
+  },
+  {
+    "path": "Examples/PivotTable/MultiplePivotTables.ps1",
+    "sha256": "b1b8b73da4cee0455e2ee86562bd78036fdd979e1742b8694a7dd8c343cd3aec"
+  },
+  {
+    "path": "Examples/PivotTable/PivotTableWithName.ps1",
+    "sha256": "9008c13293ce95ba1698919b30ac55762833a4cf625766d254fa9419738fa231"
+  },
+  {
+    "path": "Examples/PivotTable/TableAndPivotTable.ps1",
+    "sha256": "93d9ea51b7e1362fa983acb01d891f201c0b70729d4354dbde757fe9f0c5effb"
+  },
+  {
+    "path": "Examples/PivotTableFilters/testPivotFilter.ps1",
+    "sha256": "8a14a44864b81f6e110da9dea19adf6c2fc0a4e2b56437ff5bd5cfb156b05eef"
+  },
+  {
+    "path": "Examples/Plot/PlotCos.ps1",
+    "sha256": "5d13c317710ea4f72d7542ad1d2c665c11869fcf4280e3450b9c20a3293bac6b"
+  },
+  {
+    "path": "Examples/PsGallery.ps1",
+    "sha256": "fc368cf5f7e5cf9b4aa4f3e9f155dd651fcc245adc552e11ed7d67ccd3feed72"
+  },
+  {
+    "path": "Examples/ReadAllSheets/GenerateXlsx.ps1",
+    "sha256": "b95241201c880c608cd52c07766fdbdcb253d5d47bb93728c0e3c8bfcea9d605"
+  },
+  {
+    "path": "Examples/ReadAllSheets/Get-ExcelSheets.ps1",
+    "sha256": "e1caa98a409ef5674b57868f5cad0d85206aa3f4e155d363e259d4d1a7486c1c"
+  },
+  {
+    "path": "Examples/ReadAllSheets/ReadAllSheets.ps1",
+    "sha256": "d9bca9b83dba7f4bf9c4af9261445a0613d26f8c7b84b3fa76f12a8a1993a8af"
+  },
+  {
+    "path": "Examples/SetColumnBackgroundColor/SetColumnBackgroundColor.ps1",
+    "sha256": "84cfe73f12debc78d70d025ac5c74614e29b7bb3f7d6751df7bff010e66f1ae0"
+  },
+  {
+    "path": "Examples/Sparklines/SalesByQuarter.ps1",
+    "sha256": "092aacdad3a14d679e4e372281b53ae982c4a7d9a62f516f04d00a92081e479a"
+  },
+  {
+    "path": "Examples/Sparklines/Sparklines.ps1",
+    "sha256": "4c2a4f89b3cf995bc0472bee449227887552df097b505fbd1c363b1a8b2d19a0"
+  },
+  {
+    "path": "Examples/SpreadsheetCells/CalculatedFields.ps1",
+    "sha256": "e2b670a198aac1510b3c9b80f545d4f2c9983865c2376fbfe76cae8dd0eddbfe"
+  },
+  {
+    "path": "Examples/SpreadsheetCells/ExcelFormulasUsingAddMember.ps1",
+    "sha256": "3f49a07f09a41210e371300506081c4726a29119f66549eb412e1abc6aa81e75"
+  },
+  {
+    "path": "Examples/SpreadsheetCells/ExcelFunctions.ps1",
+    "sha256": "86278bb009efc98a62458dfa8f2806a4daed281f22f6fc99d3114b3dfacf26dd"
+  },
+  {
+    "path": "Examples/SpreadsheetCells/HyperLink.ps1",
+    "sha256": "104f897281cd3ee6215702cf3f50b5058106721dc6f4b8598687ac8df60d95d3"
+  },
+  {
+    "path": "Examples/SQL+FillColumns+Pivot/Example.ps1",
+    "sha256": "cffe4a5f5acfb08625b99f33a15ff066ef34cb85bfb7e0a2d9f80d77e42ec90f"
+  },
+  {
+    "path": "Examples/SQL+FillColumns+Pivot/Example2.ps1",
+    "sha256": "4508a40e7a5086f423d7a65f1624556ea0db48842719b1889de13bd86a323d09"
+  },
+  {
+    "path": "Examples/Stocks/Get-StockInfo.ps1",
+    "sha256": "fce2cf1b1419b78b72158d10e386a97f13708c726922390288e7642fb5ef729c"
+  },
+  {
+    "path": "Examples/Stocks/GetStocksAvgTotVol.ps1",
+    "sha256": "86adda4688f632660fe7e1f943d191846edf850019516b9f57d3d8cb6ee926d8"
+  },
+  {
+    "path": "Examples/Styles/MultipleStyles.ps1",
+    "sha256": "a0d1b6b6b0dab4221ab2a0c1ef6efad268604711888aa7f24f1d4dc83c4478f1"
+  },
+  {
+    "path": "Examples/Styles/NewExcelStyle.ps1",
+    "sha256": "2d7396fb9c4999da5e0fa7495a36abc14d9b762668dd47a3fa820ec69d4d07f2"
+  },
+  {
+    "path": "Examples/Subtotals.ps1",
+    "sha256": "908eb61acfe1712ff316d07a70fee7d66cf652e59ec326b32c6d67aadc254cb4"
+  },
+  {
+    "path": "Examples/Tables/MultipleTables.ps1",
+    "sha256": "9adc975e0ebb77b2e425d4c0b88b1f4f5590bf0ec5d90847853742501038f160"
+  },
+  {
+    "path": "Examples/Tables/SalesData-WithTotalRow.ps1",
+    "sha256": "a57a6e48c09fa0bc71a8263274023c70ef1e897578302481b168f4b65f5073b0"
+  },
+  {
+    "path": "Examples/Tables/TotalsRow.ps1",
+    "sha256": "825f52d2370a3b815c67257123e79510de28e522403025c815b95aef60a1e206"
+  },
+  {
+    "path": "Examples/TestRestAPI/PSExcelPester.psm1",
+    "sha256": "72fd8049c1b80fee2e43ffc2c4079a4155b7d7e314862d441e888336aed9cc9c"
+  },
+  {
+    "path": "Examples/TestRestAPI/RunAndShowUnitTests.ps1",
+    "sha256": "ef9adcdbb89ea25453d2829b83954d4ed1d624e4fe4ce9ca7e55a51144f9a241"
+  },
+  {
+    "path": "Examples/TestRestAPI/ShowPesterResults.ps1",
+    "sha256": "57f688bac0f00ec69c0b43de8058b725ae002d5edc20a206365cb06a0c71fbfd"
+  },
+  {
+    "path": "Examples/TestRestAPI/TestAPIReadXls.ps1",
+    "sha256": "97df5708c03de135007201cc9808f489b3267824bdc4a6b397886aa1acd48a81"
+  },
+  {
+    "path": "Examples/TestRestAPI/TryIt.ps1",
+    "sha256": "5056b1d94eb35629a465a189911d253269175357e36e24e277d118ebce571219"
+  },
+  {
+    "path": "Examples/TryMultiplePivotTables.ps1",
+    "sha256": "ee73762013f4328c73d9f58251b4d4ac3f04a3c3360b6490cbe2c757ba49dae3"
+  },
+  {
+    "path": "Examples/TryMultiplePivotTablesFromOneSheet.ps1",
+    "sha256": "580f403dd972978e8ea0a5afdfa50f072d873f4847b62f8143e2870a2630d633"
+  },
+  {
+    "path": "Examples/VBA/AddModuleMultipleWorksheetVBA.ps1",
+    "sha256": "afc3a25927d2292e5797e600dbf85eee36c5d7fb61c9125f1ce2c2cb8a0017a2"
+  },
+  {
+    "path": "Examples/VBA/AddWorksheetVBA.ps1",
+    "sha256": "768377a3a9a3aff22163deaa6add96fe220447706d88467663f832e3db3174fd"
+  },
+  {
+    "path": "Examples/VBA/ChangePivotTablesVBA.ps1",
+    "sha256": "7c20a0980054fae17f88e08b8da0669560ff1a2cf0097c9e5f730e75aa935eeb"
+  },
+  {
+    "path": "Examples/VBA/HelloWorldVBA.ps1",
+    "sha256": "922625174eced751f20a00aaa66dd0363790f36e472980f68e31a109c7657eb5"
+  },
+  {
+    "path": "Examples/VLookUp/test.ps1",
+    "sha256": "259d49e2aeca0902988f082f533d96eddbb857949c343ec497e9de21228397d9"
+  },
+  {
+    "path": "Examples/XlRangeToImage/XlRangeToImage.ps1",
+    "sha256": "b3c41b1bfe998b578a9bfbe3cd4ccd5518d8f6c8ff0db2cf951d00e6ed39c23d"
+  },
+  {
+    "path": "Export-charts.ps1",
+    "sha256": "b84ffedb8dbdd46f6bdb728a08fcbf1690ed75d671199b394cf8e7e8d4e6e2d6"
+  },
+  {
+    "path": "Export-StocksToExcel.ps1",
+    "sha256": "0bc5b27e46c26fbf8e934b98f803a901cd65a23c37386ee7a3606d9070a6764a"
+  },
+  {
+    "path": "GetExcelTable.ps1",
+    "sha256": "ab2b24cf72a52d4c9d25f5e64d24f97306c77c1f381ab3dbf75adb50075f4e9c"
+  },
+  {
+    "path": "ImportExcel.psd1",
+    "sha256": "dcc25c276a757e7364b4aff5a7d51aa7e1f666f4bcd90d19d82df7e0f869f151"
+  },
+  {
+    "path": "ImportExcel.psm1",
+    "sha256": "62a4c4420e0cec570bee463983f0bad9a1d7db2ac05dda1c4f69883f4b68a807"
+  },
+  {
+    "path": "InferData/InferData.ps1",
+    "sha256": "dbc176029496058f50f7efc865285665960de0b17d11ca2c2cd04a898944a27a"
+  },
+  {
+    "path": "Pivot/Pivot.ps1",
+    "sha256": "a81fce9b4eb24abd442cf31330e4e46baab6d14b8e7127e8e28fd81fff7fb77f"
+  },
+  {
+    "path": "Plot.ps1",
+    "sha256": "8fd55dcfd65a13af928f9dcba469aafe9d4ca7ae8f1cfe48cfae0bdfb2d59ccb"
+  },
+  {
+    "path": "Private/ArgumentCompletion.ps1",
+    "sha256": "b4e551b960cf47cee70ab839128b9a85b52990e4f9a8444699676bdb92590f8f"
+  },
+  {
+    "path": "Private/Invoke-ExcelReZipFile.ps1",
+    "sha256": "93e6166fdbfd4ffca02cb14a612a767fc530dbc9b17f8f68b2d636487bfe2c5d"
+  },
+  {
+    "path": "Public/Add-ConditionalFormatting.ps1",
+    "sha256": "540965d79f4d06f86d93e4e40046896b2e76ab7e169b4723854aa12c2544e22a"
+  },
+  {
+    "path": "Public/Add-ExcelChart.ps1",
+    "sha256": "d892010b8fef11906257b83259ada1b026f80b29f62f186ea82518cb9988bdd2"
+  },
+  {
+    "path": "Public/Add-ExcelDataValidationRule.ps1",
+    "sha256": "3017fe3b419b9c7d6676ddb02ebd6e710925fa46867cc659e06f006cb3625c25"
+  },
+  {
+    "path": "Public/Add-ExcelName.ps1",
+    "sha256": "8f06360bbcb7ec73a5222827c385ca164ce5969b37a4dbcad1985e1edae9a3f0"
+  },
+  {
+    "path": "Public/Add-ExcelTable.ps1",
+    "sha256": "22bd84bdc34ea36dfeb62e6e969ecb946662ce2bf147897fba9cacb4e88c03c5"
+  },
+  {
+    "path": "Public/Add-PivotTable.ps1",
+    "sha256": "6affb38229f2e848cce46ee9318d7f52955cd61f88605014d2d372a58fdd9a78"
+  },
+  {
+    "path": "Public/Add-Worksheet.ps1",
+    "sha256": "ee30b6224b6802e592de9858e75cf5432649f8db2e6e4ce22a6f4d1fe3bdcf65"
+  },
+  {
+    "path": "Public/Close-ExcelPackage.ps1",
+    "sha256": "a016c3f28b16988f273ad7653ffbc16985f03b600ba8bd89500fb43dac051988"
+  },
+  {
+    "path": "Public/Compare-Worksheet.ps1",
+    "sha256": "f1bbc621e8fb4451810014abf3305985a07bed7c4f80b35f148e34292d76b117"
+  },
+  {
+    "path": "Public/Convert-ExcelRangeToImage.ps1",
+    "sha256": "399135a861f93acae0627502fa0f3ecee5e462557614808ed7d60418dbfc6e27"
+  },
+  {
+    "path": "Public/ConvertFrom-ExcelData.ps1",
+    "sha256": "55bf7157a3d6d33625d1a7a4ce9b2980413cb694a65d8239956674c4ccdb4faf"
+  },
+  {
+    "path": "Public/ConvertFrom-ExcelSheet.ps1",
+    "sha256": "e1f40e1681ec7ef57e9f0f373dcc4c517c315d036ec3fc81098a5ed116e351ff"
+  },
+  {
+    "path": "Public/ConvertFrom-ExcelToSQLInsert.ps1",
+    "sha256": "13b4fa6152fc9d8cced9825b63bc7a6ab640aea1f886ffdeeca8f39712e4176f"
+  },
+  {
+    "path": "Public/ConvertTo-ExcelXlsx.ps1",
+    "sha256": "917178d2f444823bb09c70d76a402fe4fcbfd8ce6bb7e42017333934ebb45e72"
+  },
+  {
+    "path": "Public/Copy-ExcelWorksheet.ps1",
+    "sha256": "ef037152bf119b00c02818035735e7d24d4b545efbdaafd1c12c873190c858f0"
+  },
+  {
+    "path": "Public/Enable-ExcelAutoFilter.ps1",
+    "sha256": "5c4140e740b371790ae1ad53a794b7cab7946f697d86bd8f49547c1c83bbf9b2"
+  },
+  {
+    "path": "Public/Enable-ExcelAutofit.ps1",
+    "sha256": "539ee80ecc8bcfb11b1d1e8301d01a882d112f9a02a158342f2516992e090995"
+  },
+  {
+    "path": "Public/Expand-NumberFormat.ps1",
+    "sha256": "358789422d0f1254f0897576aaea90f57ca540b2b8f418b81b8492adc65be02e"
+  },
+  {
+    "path": "Public/Export-Excel.ps1",
+    "sha256": "b2d903079d666096c8e09654173538e51e0952742795840c3aeec326b6aab774"
+  },
+  {
+    "path": "Public/Get-ExcelColumnName.ps1",
+    "sha256": "525458b6bb16f6b329cfb96a209d5f4635ce04811775d4afae42061a02f895fe"
+  },
+  {
+    "path": "Public/Get-ExcelFileSchema.ps1",
+    "sha256": "65e7fb3c5a0a90710e4f27f7864324678f02e02cd04d03e4950edbeb8a05c27d"
+  },
+  {
+    "path": "Public/Get-ExcelFileSummary.ps1",
+    "sha256": "5326c433ffcd8e00ccf3de567b2fc40851784e338566afe9199355b1cd3d8651"
+  },
+  {
+    "path": "Public/Get-ExcelSheetDimensionAddress.ps1",
+    "sha256": "31c557aaec877f71d3a2cea6916dc013f69126e83e73c67412128a9525e9cca1"
+  },
+  {
+    "path": "Public/Get-ExcelSheetInfo.ps1",
+    "sha256": "e7bc0140619aa62d6fe8efdaad6055dfb80612bcdc7a93b7f907280e736e513f"
+  },
+  {
+    "path": "Public/Get-ExcelWorkbookInfo.ps1",
+    "sha256": "18efc62b116a103380ce6e20b8e36d281b5b5e058b7a75acc3fcac201ab68bfe"
+  },
+  {
+    "path": "Public/Get-HtmlTable.ps1",
+    "sha256": "5aa67b757f7e2096f697318f92db51f129f8676cf6eab83cb2fa57db1673e8cd"
+  },
+  {
+    "path": "Public/Get-Range.ps1",
+    "sha256": "fee968540a6b288940f205e8e2cd578ae61ec2871044d8ee915709d890f02270"
+  },
+  {
+    "path": "Public/Get-XYRange.ps1",
+    "sha256": "e418d613c2cd24e7c140d1fb09c37deb9823ff296d8581a8451b757c54a3d123"
+  },
+  {
+    "path": "Public/Import-Excel.ps1",
+    "sha256": "7729c826ff413bca995087f495941162aed8afd898f2b143075203adb8857416"
+  },
+  {
+    "path": "Public/Import-Html.ps1",
+    "sha256": "5de0520f1628331ca524b7925b59d85868392cad1974d2ef05073d89a6388796"
+  },
+  {
+    "path": "Public/Import-UPS.ps1",
+    "sha256": "58985fa6d4ba5c3dc3e9bee65c8906f8b43e88787bba8a40c0b2c2c46d54fb96"
+  },
+  {
+    "path": "Public/Import-USPS.ps1",
+    "sha256": "6c7dd4bbca9e4feff7c500501827884ab98ad5ae4743df270875b095ef4f634e"
+  },
+  {
+    "path": "Public/Invoke-ExcelQuery.ps1",
+    "sha256": "313ef85850ba001b46d16374edb9d0d00f44b02edfbba85e16c69e0b0617233e"
+  },
+  {
+    "path": "Public/Invoke-Sum.ps1",
+    "sha256": "b1c477114702c8c5f8f35ff732a799be1ea1648920e947385e62aac4091d2580"
+  },
+  {
+    "path": "Public/Join-Worksheet.ps1",
+    "sha256": "6f35e2823da8b39a2d6bb75098682c2e0f820f82d6b45e31cfe2e4d98a606835"
+  },
+  {
+    "path": "Public/Merge-MultipleSheets.ps1",
+    "sha256": "7c1f2656693869310c2168c599368a952a463ba196b821145b391db2cc8d32d4"
+  },
+  {
+    "path": "Public/Merge-Worksheet.ps1",
+    "sha256": "a6d3c85bafdf2f5d6e592953d4f6c0e2c53935f8ce6b5fdf074315e1db385d48"
+  },
+  {
+    "path": "Public/New-ConditionalFormattingIconSet.ps1",
+    "sha256": "895a3a18ecc55406247fa1db2278bd0fd08f48084400d64cc0ec8bb5a348874d"
+  },
+  {
+    "path": "Public/New-ConditionalText.ps1",
+    "sha256": "a2a193de66e1a25d3946e9efd6ca41cb02edb2396043c7d6bda20cb4c945d402"
+  },
+  {
+    "path": "Public/New-ExcelChartDefinition.ps1",
+    "sha256": "3ef4547aa2c3d67c18e682496e7ad9528bdbe946763a4cdfcd9278822a8ef227"
+  },
+  {
+    "path": "Public/New-ExcelStyle.ps1",
+    "sha256": "972c644c238a6586fd35aedd66d2f6c82b6cc3924912ff88e37a76f1d132bbaf"
+  },
+  {
+    "path": "Public/New-PivotTableDefinition.ps1",
+    "sha256": "c8437652b18418a02613815614766c32ec39f6365ac2d024e491849624fc011c"
+  },
+  {
+    "path": "Public/New-PSItem.ps1",
+    "sha256": "8d81bd359298ea5d50e2febc128064e8dd1fa1ed4b1ce787f83fcbe7f04d72fc"
+  },
+  {
+    "path": "Public/Open-ExcelPackage.ps1",
+    "sha256": "31d8795314de3277335a4238d261efd344a1ae56c6dd6bbbc64bf5e498ff3230"
+  },
+  {
+    "path": "Public/Read-Clipboard.ps1",
+    "sha256": "ffc39b7d2cd858b5dece9c67f803ab14395cc0e0092743f25c6bfaaf209692be"
+  },
+  {
+    "path": "Public/Read-OleDbData.ps1",
+    "sha256": "002ac10b96e515c92a62d0d66633ac948c19f4d63471890d47d5f1e30e3d6082"
+  },
+  {
+    "path": "Public/Remove-Worksheet.ps1",
+    "sha256": "c8d7f031ce05b5f9f6fd2c76c617fb40db1a77eff6082e9ea70b697d59659f35"
+  },
+  {
+    "path": "Public/Select-Worksheet.ps1",
+    "sha256": "df13401528b816337ed17ffa6056dc2a535bc867c9f1909b0792adac5de4c045"
+  },
+  {
+    "path": "Public/Send-SQLDataToExcel.ps1",
+    "sha256": "a6e02be360ee9a8d513cc26f202bd2f79513151e1b5487c1be4b95617cf7d47b"
+  },
+  {
+    "path": "Public/Set-CellComment.ps1",
+    "sha256": "4ad0894a85c7f057151d2a31430bd5493a9ab81e0d8e18d2cd1b503af127ecbb"
+  },
+  {
+    "path": "Public/Set-CellStyle.ps1",
+    "sha256": "f1789dd22470b51049699b1aa8c8f7d72e81f605c18a38454bd86fcb3b02db06"
+  },
+  {
+    "path": "Public/Set-ExcelColumn.ps1",
+    "sha256": "0232d0d27225cdd6543b854c4be86ab408428fa6b5ca452c40cb81830a78bdc2"
+  },
+  {
+    "path": "Public/Set-ExcelRange.ps1",
+    "sha256": "f10887fb458d388ee5c16466fd71646180b45a0a8521276db9cecfa278f53041"
+  },
+  {
+    "path": "Public/Set-ExcelRow.ps1",
+    "sha256": "b02cde8e6e177706b0800a52377cfbe53a51d7dfbd3526a529391bf47c1d3b7c"
+  },
+  {
+    "path": "Public/Set-WorksheetProtection.ps1",
+    "sha256": "cfe2424c98df713d065308309e2199e7ae88d7c5955d3e4bca9f87597b2a972a"
+  },
+  {
+    "path": "Public/Update-FirstObjectProperties.ps1",
+    "sha256": "df84b08fdaa6dfd07b486afdb983b8c91a6d3e10ff872c0334f080cc25cdd5da"
+  }
+]

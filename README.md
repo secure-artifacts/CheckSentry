@@ -37,18 +37,20 @@ CheckSentry 是一个纯本地运行的 Windows IT 合规核对工具。它从 W
 
 - Windows 10/11 或相应 Windows Server。
 - Windows PowerShell 5.1，或 PowerShell 7。
-- 首次运行时访问 PowerShell Gallery，以安装经过验证的 `ImportExcel 7.8.10`。
+- 发布包已内置固定版本 `ImportExcel 7.8.10`，首次运行不需要访问 PowerShell Gallery。
 - 不需要安装 Microsoft Office。
 
-如果目标环境不能联网，请在可联网环境下载并按企业软件分发流程安装 `ImportExcel 7.8.10`，然后再运行 CheckSentry。
+推荐使用发布包中的单文件 `CheckSentry.exe`。工具采用完全便携模式：`list.xlsx`、设置、日志和运行文件全部保存在 EXE 所在目录，不在 `%LocalAppData%` 或其他 C 盘目录保存 CheckSentry 数据。若检测到 1.1.1/1.1.2 曾在 `%LocalAppData%\CheckSentry` 生成数据，新版会自动迁回 EXE 所在目录并清理旧运行文件。
 
 ## 首次运行
 
 1. 解压完整发布包到本地普通目录。
-2. 双击 `运行核对工具.bat`。
+2. 优先双击 `CheckSentry.exe`；源码包可双击 `运行核对工具.bat`。
 3. 工具在 `list.xlsx` 不存在时，从空白 `list_template.xlsx` 复制创建。
 4. 默认尝试监听 `http://localhost:8787/`。如果 8787 被占用，会尝试后续端口，并在命令窗口显示实际地址。
 5. 首次扫描到的项目会自动写入“待定”，然后显示在报告中。
+
+如果启动失败，程序会显示错误弹窗，并把完整输出保存到 EXE 同目录的 `Logs` 文件夹，不再无提示闪退。
 
 使用 PowerShell 7 时可以运行：
 
@@ -101,9 +103,10 @@ powershell.exe -NoProfile -File .\Start-ComplianceCheck.ps1 -Port 8790 -ListPath
 
 ## 扫描刷新与图标
 
-- 软件图标依次尝试卸载注册表 `DisplayIcon`、MSI `ProductIcon`、安装目录主程序和开始菜单快捷方式；支持 EXE/DLL 中的正数和负数资源索引。
+- 软件、Chromium 和 Firefox 在后台分路扫描，浏览器先显示实时进度，扫描完成后自动进入报告。
+- 软件图标按页面可见范围懒加载，再依次尝试卸载注册表 `DisplayIcon`、MSI `ProductIcon`、安装目录主程序和开始菜单快捷方式；支持 EXE/DLL 中的正数和负数资源索引。
 - 开始菜单回退只读取快捷方式的图标位置和目标文件，并要求软件名、快捷方式名或文件产品名达到高置信度；候选存在歧义时使用安全占位图标，不猜测匹配。
-- 图标只在内存中转换为 PNG/data URI，并按文件路径、资源索引、大小和修改时间缓存，不写入 Excel。
+- 图标只在页面需要显示时转换为 PNG/data URI，并按文件路径、资源索引、大小和修改时间缓存，不写入 Excel。
 - 分类完成后的页面更新复用当前软件和插件清单，避免立即重复扫描所有浏览器。
 - 点击报告页的“重新扫描分类”会明确执行一次完整注册表和浏览器扫描。
 
@@ -124,7 +127,7 @@ powershell.exe -NoProfile -File .\Start-ComplianceCheck.ps1 -Port 8790 -ListPath
 
 ## GitHub 发布清单
 
-正式发布包应只包含：
+正式发布包由 `Build-Release.ps1` 生成，包含：
 
 - `README.md`
 - `TESTING.md`
@@ -135,6 +138,10 @@ powershell.exe -NoProfile -File .\Start-ComplianceCheck.ps1 -Port 8790 -ListPath
 - `report_template.html`
 - `management_template.html`
 - `list_template.xlsx`
+- `CheckSentry.exe`
+- `Modules/ImportExcel/7.8.10`
+
+源码维护者先运行 `Prepare-Dependencies.ps1` 固定离线依赖，然后执行 `tests/Run-Tests.ps1`。正式 Tag 发布必须在 GitHub Secrets 配置 `WINDOWS_SIGNING_CERT_BASE64` 与 `WINDOWS_SIGNING_CERT_PASSWORD`，流水线会拒绝生成未签名的正式 Release。
 
 发布前确认包内没有 `list.xlsx`、`.DS_Store`、`~$*.xlsx`、备份、日志、测试结果或临时文件。
 

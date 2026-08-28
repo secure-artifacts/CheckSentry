@@ -4,6 +4,8 @@
     不使用 Win32_Product，也不依赖当前 PowerShell 进程位数。
 #>
 
+$script:StartMenuIconCatalogCache = $null
+
 function Expand-RegistryPathValue {
     param([object]$Value)
     if ($null -eq $Value) { return '' }
@@ -328,14 +330,16 @@ function Resolve-StartMenuIconReference {
 function Get-RegistryUninstallEntries {
     param(
         [Microsoft.Win32.RegistryHive]$Hive,
-        [Microsoft.Win32.RegistryView]$View
+        [Microsoft.Win32.RegistryView]$View,
+        [string]$UserSid = ''
     )
 
     $baseKey = $null
     $uninstallKey = $null
     try {
         $baseKey = [Microsoft.Win32.RegistryKey]::OpenBaseKey($Hive, $View)
-        $uninstallKey = $baseKey.OpenSubKey('SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall', $false)
+        $uninstallSubPath = if ([string]::IsNullOrWhiteSpace($UserSid)) { 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall' } else { $UserSid + '\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall' }
+        $uninstallKey = $baseKey.OpenSubKey($uninstallSubPath, $false)
         if ($null -eq $uninstallKey) { return @() }
 
         $items = @()
@@ -356,7 +360,7 @@ function Get-RegistryUninstallEntries {
                     SystemComponent = $subKey.GetValue('SystemComponent', $null, $options)
                     ParentKeyName   = $subKey.GetValue('ParentKeyName', $null, $options)
                     ReleaseType     = $subKey.GetValue('ReleaseType', $null, $options)
-                    RegistryHive    = [string]$Hive
+                    RegistryHive    = if ([string]::IsNullOrWhiteSpace($UserSid)) { [string]$Hive } else { ([string]$Hive + '\' + $UserSid) }
                     RegistryView    = [string]$View
                     RegistryKeyName = $subKeyName
                 }
@@ -374,6 +378,7 @@ function Get-RegistryUninstallEntries {
 }
 
 function Get-AppxSoftwareList {
+    param([switch]$AllUsers)
     $items = @()
     try {
         $appNames = @{}
@@ -404,7 +409,8 @@ function Get-AppxSoftwareList {
             }
         }
 
-                $packages = Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object {
+        $packages = if ($AllUsers) { Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue } else { Get-AppxPackage -ErrorAction SilentlyContinue }
+        $packages = $packages | Where-Object {
             -not $_.IsFramework -and
             -not $_.IsResourcePackage -and
             -not $_.NonRemovable -and
@@ -478,9 +484,45 @@ function Get-AppxSoftwareList {
     return $items
 }
 
+function Resolve-InstalledSoftwareIconReference {
+    param($Item)
+
+    $existingPath = [string]$Item.图标路径
+    if (-not [string]::IsNullOrWhiteSpace($existingPath) -and (Test-Path -LiteralPath $existingPath -PathType Leaf)) {
+        return New-SoftwareIconReference -Path $existingPath -Index ([int]$Item.图标索引) -Source ([string]$Item.图标来源)
+    }
+
+    $displayName = [string]$Item.名称
+    $installLocation = [string]$Item.安装路径
+    $iconReference = Resolve-DisplayIconReference -DisplayIcon $Item.IconDisplayIcon
+    if ($null -eq $iconReference) {
+        $iconReference = Resolve-MsiProductIconReference -RegistryKeyName $Item.IconRegistryKeyName -UninstallString $Item.卸载命令
+    }
+    if ($null -eq $iconReference) {
+        $iconReference = Resolve-InstallLocationIconReference -InstallLocation $installLocation -DisplayName $displayName
+    }
+    if ($null -eq $iconReference) {
+        $iconReference = Resolve-UninstallStringIconReference -UninstallString $Item.卸载命令
+    }
+    if ($null -eq $iconReference) {
+        $iconReference = Resolve-TeamsMeetingAddinIconReference -DisplayName $displayName
+    }
+    if ($null -eq $iconReference) {
+        if ($null -eq $script:StartMenuIconCatalogCache) {
+            $script:StartMenuIconCatalogCache = @(Get-StartMenuIconCatalog)
+        }
+        $iconReference = Resolve-StartMenuIconReference -DisplayName $displayName -Catalog $script:StartMenuIconCatalogCache
+    }
+    return $iconReference
+}
+
 function Get-InstalledSoftwareList {
     [CmdletBinding()]
-    param([switch]$IncludeSystemComponents)
+    param(
+        [switch]$IncludeSystemComponents,
+        [switch]$ResolveIcons,
+        [switch]$AllUsers
+    )
 
     $views = @([Microsoft.Win32.RegistryView]::Default)
     if ([Environment]::Is64BitOperatingSystem) {
@@ -497,7 +539,24 @@ function Get-InstalledSoftwareList {
         }
     }
 
-    $raw += @(Get-AppxSoftwareList)
+    if ($AllUsers) {
+        $currentUserSid = ''
+        try { $currentUserSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value } catch {}
+        foreach ($view in $views) {
+            $usersBaseKey = $null
+            try {
+                $usersBaseKey = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::Users, $view)
+                foreach ($sid in @($usersBaseKey.GetSubKeyNames() | Where-Object { $_ -match '^S-1-5-21-' -and $_ -notlike '*_Classes' })) {
+                    if (-not [string]::IsNullOrWhiteSpace($currentUserSid) -and $sid -eq $currentUserSid) { continue }
+                    $raw += @(Get-RegistryUninstallEntries -Hive ([Microsoft.Win32.RegistryHive]::Users) -View $view -UserSid $sid)
+                }
+            } finally {
+                if ($null -ne $usersBaseKey) { $usersBaseKey.Dispose() }
+            }
+        }
+    }
+
+    $raw += @(Get-AppxSoftwareList -AllUsers:$AllUsers)
 
     $raw = @($raw | Where-Object {
         $null -ne $_.DisplayName -and -not [string]::IsNullOrWhiteSpace([string]$_.DisplayName)
@@ -511,30 +570,25 @@ function Get-InstalledSoftwareList {
         })
     }
 
-    $shortcutCatalog = $null
-    $shortcutCatalogLoaded = $false
     $result = foreach ($item in $raw) {
         $displayName = ([string]$item.DisplayName).Trim()
         $installLocation = (Expand-RegistryPathValue -Value $item.InstallLocation).Trim().Trim('"')
         $iconReference = Resolve-DisplayIconReference -DisplayIcon $item.DisplayIcon
-        if ($null -eq $iconReference) {
+        if ($ResolveIcons -and $null -eq $iconReference) {
             $iconReference = Resolve-MsiProductIconReference -RegistryKeyName $item.RegistryKeyName -UninstallString $item.UninstallString
         }
-        if ($null -eq $iconReference) {
+        if ($ResolveIcons -and $null -eq $iconReference) {
             $iconReference = Resolve-InstallLocationIconReference -InstallLocation $installLocation -DisplayName $displayName
         }
-        if ($null -eq $iconReference) {
+        if ($ResolveIcons -and $null -eq $iconReference) {
             $iconReference = Resolve-UninstallStringIconReference -UninstallString $item.UninstallString
         }
-        if ($null -eq $iconReference) {
+        if ($ResolveIcons -and $null -eq $iconReference) {
             $iconReference = Resolve-TeamsMeetingAddinIconReference -DisplayName $displayName
         }
-        if ($null -eq $iconReference) {
-            if (-not $shortcutCatalogLoaded) {
-                $shortcutCatalog = @(Get-StartMenuIconCatalog)
-                $shortcutCatalogLoaded = $true
-            }
-            $iconReference = Resolve-StartMenuIconReference -DisplayName $displayName -Catalog $shortcutCatalog
+        if ($ResolveIcons -and $null -eq $iconReference) {
+            if ($null -eq $script:StartMenuIconCatalogCache) { $script:StartMenuIconCatalogCache = @(Get-StartMenuIconCatalog) }
+            $iconReference = Resolve-StartMenuIconReference -DisplayName $displayName -Catalog $script:StartMenuIconCatalogCache
         }
         [PSCustomObject]@{
             名称       = $displayName
@@ -547,6 +601,8 @@ function Get-InstalledSoftwareList {
             图标索引   = if ($null -ne $iconReference) { [int]$iconReference.Index } else { 0 }
             图标来源   = if ($null -ne $iconReference) { [string]$iconReference.Source } else { '' }
             注册表来源 = ('{0}\{1}\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{2}' -f $item.RegistryHive, $item.RegistryView, $item.RegistryKeyName)
+            IconDisplayIcon = if ($null -ne $item.DisplayIcon) { [string]$item.DisplayIcon } else { '' }
+            IconRegistryKeyName = if ($null -ne $item.RegistryKeyName) { [string]$item.RegistryKeyName } else { '' }
         }
     }
 

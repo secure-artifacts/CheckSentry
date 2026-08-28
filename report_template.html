@@ -593,6 +593,33 @@ const reloadButton = document.getElementById('reloadButton');
 if (reloadButton) reloadButton.addEventListener('click', () => { window.location.href = '/?refresh=1'; });
 updateBatchCount();
 
+async function loadCheckSentryIcon(img) {
+  if (!img || img.dataset.loaded === '1') return;
+  img.dataset.loaded = '1';
+  try {
+    const response = await fetch('/api/icon?key=' + encodeURIComponent(img.dataset.iconKey || ''));
+    const data = await response.json();
+    if (!response.ok || !data.ok || !data.dataUri) return;
+    img.addEventListener('load', () => {
+      img.classList.remove('hidden');
+      const fallback = img.nextElementSibling;
+      if (fallback) fallback.classList.add('hidden');
+    }, { once: true });
+    img.src = data.dataUri;
+  } catch (e) { /* 使用占位图标 */ }
+}
+
+const lazyIconObserver = ('IntersectionObserver' in window) ? new IntersectionObserver(entries => {
+  entries.forEach(entry => {
+    if (!entry.isIntersecting) return;
+    lazyIconObserver.unobserve(entry.target);
+    loadCheckSentryIcon(entry.target);
+  });
+}, { rootMargin: '200px' }) : null;
+document.querySelectorAll('img.lazy-checksentry-icon').forEach(img => {
+  if (lazyIconObserver) lazyIconObserver.observe(img); else loadCheckSentryIcon(img);
+});
+
 document.querySelectorAll("td.reason .truncate-hover").forEach(cell => {
   const tr = cell.closest("tr");
   const form = tr.querySelector("form.rule-action-form");

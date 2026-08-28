@@ -358,6 +358,37 @@ function linkifyNote(value, nativeHref) {
   });
 }
 
+async function loadCheckSentryIcon(img) {
+  if (!img || img.dataset.loaded === '1') return;
+  img.dataset.loaded = '1';
+  try {
+    const response = await fetch('/api/icon?key=' + encodeURIComponent(img.dataset.iconKey || ''));
+    const data = await response.json();
+    if (!response.ok || !data.ok || !data.dataUri) return;
+    img.addEventListener('load', () => {
+      img.style.display = '';
+      const fallback = img.nextElementSibling;
+      if (fallback) fallback.style.display = 'none';
+    }, { once: true });
+    img.src = data.dataUri;
+  } catch (e) { /* 使用占位图标 */ }
+}
+
+function observeRuleIcons(root) {
+  root.querySelectorAll('img.rule-icon[data-icon-key]').forEach(img => {
+    if ('IntersectionObserver' in window) {
+      const observer = new IntersectionObserver(entries => {
+        entries.forEach(entry => {
+          if (!entry.isIntersecting) return;
+          observer.disconnect();
+          loadCheckSentryIcon(img);
+        });
+      }, { rootMargin: '200px' });
+      observer.observe(img);
+    } else loadCheckSentryIcon(img);
+  });
+}
+
 function sortLabel(label, key) {
   const mark = sortKey === key ? (sortDirection === 1 ? ' ▲' : ' ▼') : '';
   return `<th class="sortable" data-sort-key="${escapeHtml(key)}">${escapeHtml(label)}<span class="sort-indicator">${mark}</span></th>`;
@@ -749,6 +780,7 @@ function filterTable() {
     tr.dataset.ruleSheet = currentTab;
     const fallbackIcon = type === '软件' ? '&#128187;' : (type === 'Chromium插件' ? '&#127760;' : '&#129418;');
     const iconData = rule['图标数据'] || '';
+    const iconKey = rule['图标键'] || '';
         const safeId = escapeHtml(rule.id || '-');
     const safeType = escapeHtml(type);
     const safeIconData = escapeHtml(iconData);
@@ -766,6 +798,8 @@ function filterTable() {
 
     const icon = iconData
       ? `<img class="rule-icon" src="${safeIconData}" alt="" loading="lazy"><span class="rule-icon-fallback" style="display:none;">${fallbackIcon}</span>`
+      : iconKey
+      ? `<img class="rule-icon" data-icon-key="${escapeHtml(iconKey)}" alt="" loading="lazy" style="display:none;"><span class="rule-icon-fallback">${fallbackIcon}</span>`
       : `<span class="rule-icon-fallback">${fallbackIcon}</span>`;
     
     const selectionKey = currentTab + '|' + String(rule.id || '');
@@ -807,7 +841,7 @@ function filterTable() {
       iconElement.addEventListener('error', () => {
         iconElement.style.display = 'none';
         const fallback = iconElement.nextElementSibling;
-        if (fallback) fallback.style.display = 'inline';
+      if (fallback) fallback.style.display = 'inline';
       });
     }
     tbody.appendChild(tr);
@@ -821,6 +855,7 @@ function filterTable() {
       const emptyColspan = 14;
     tbody.innerHTML = `<tr><td colspan="${emptyColspan}" style="text-align:center;color:#999;padding:20px;">没有找到匹配的规则</td></tr>`;
   }
+  observeRuleIcons(tbody);
 
 }
 

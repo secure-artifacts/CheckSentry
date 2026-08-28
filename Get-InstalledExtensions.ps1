@@ -168,7 +168,28 @@ function Get-ChromiumProfileDisplayName {
     return $DirectoryName
 }
 
+function Get-ChromiumProfileExtensionSettings {
+    param([string]$ProfilePath)
+    $settings = @{}
+    foreach ($fileName in @('Preferences', 'Secure Preferences')) {
+        $settingsPath = Join-Path $ProfilePath $fileName
+        if (-not (Test-Path -LiteralPath $settingsPath -PathType Leaf)) { continue }
+        try {
+            $document = Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            $extensionSettings = $document.extensions.settings
+            if ($null -eq $extensionSettings) { continue }
+            foreach ($property in $extensionSettings.PSObject.Properties) {
+                $settings[$property.Name.ToLowerInvariant()] = $property.Value
+            }
+        } catch {
+            Write-Verbose "解析 Chromium 插件启用状态失败：$settingsPath。$($_.Exception.Message)"
+        }
+    }
+    return $settings
+}
+
 function Get-ChromiumExtensions {
+    param([switch]$IncludeInactive)
     $localAppData = [Environment]::GetFolderPath('LocalApplicationData')
     $browsers = [ordered]@{
         'Chrome'   = Join-Path $localAppData 'Google\Chrome\User Data'
@@ -204,10 +225,22 @@ function Get-ChromiumExtensions {
 
         foreach ($browserProfile in $profiles) {
             $extensionsPath = Join-Path $browserProfile.FullName 'Extensions'
+            $configuredExtensions = Get-ChromiumProfileExtensionSettings -ProfilePath $browserProfile.FullName
             try { $extensionDirectories = @(Get-ChildItem -LiteralPath $extensionsPath -Directory -ErrorAction Stop) } catch { continue }
             foreach ($extensionDirectory in $extensionDirectories) {
                 $extensionId = $extensionDirectory.Name
                 if ($extensionId -notmatch '^[A-Za-z0-9_@.{}-]{1,256}$') { continue }
+
+                $extensionSettings = $null
+                $settingsKey = $extensionId.ToLowerInvariant()
+                if ($configuredExtensions.ContainsKey($settingsKey)) { $extensionSettings = $configuredExtensions[$settingsKey] }
+                $active = $true
+                if ($null -ne $extensionSettings -and $null -ne $extensionSettings.state) { $active = ([int]$extensionSettings.state -ne 0) }
+                if (-not $IncludeInactive -and -not $active) { continue }
+                if ($configuredExtensions.Count -gt 0 -and $null -eq $extensionSettings) {
+                    # 扩展目录存在但浏览器配置中没有记录时，通常是卸载后的残留目录。
+                    continue
+                }
 
                 try {
                     $versionDirectories = @(Get-ChildItem -LiteralPath $extensionDirectory.FullName -Directory -ErrorAction Stop | Sort-Object {
@@ -215,6 +248,14 @@ function Get-ChromiumExtensions {
                     } -Descending)
                 } catch {
                     continue
+                }
+
+                if ($null -ne $extensionSettings -and -not [string]::IsNullOrWhiteSpace([string]$extensionSettings.path)) {
+                    $configuredVersionDirectory = Split-Path ([string]$extensionSettings.path).TrimEnd('\', '/') -Leaf
+                    $preferred = @($versionDirectories | Where-Object { $_.Name -eq $configuredVersionDirectory })
+                    if ($preferred.Count -gt 0) {
+                        $versionDirectories = @($preferred + @($versionDirectories | Where-Object { $_.Name -ne $configuredVersionDirectory }))
+                    }
                 }
 
                 $selected = $null
@@ -249,6 +290,7 @@ function Get-ChromiumExtensions {
                     ProfileName   = Get-ChromiumProfileDisplayName -LocalState $localState -DirectoryName $browserProfile.Name
                     ProfilePath   = $browserProfile.FullName
                     IconPath      = Resolve-ExtensionIconPath -Manifest $manifest -BasePath $selected.Directory.FullName
+                    Active        = $active
                 }
             }
         }
@@ -274,11 +316,13 @@ function Get-ChromiumExtensions {
             ExtensionId = $group.Name
             Name = $first.Name
             Version = $displayVersion
+            Versions = $uniqueVersions
             Publisher = $first.Publisher
             IconPath = if ($null -ne $iconItem) { $iconItem.IconPath } else { '' }
             BrowserFamily = @($items | Select-Object -ExpandProperty BrowserFamily -Unique)
             Locations = @($locations | Sort-Object Browser, ProfilePath -Unique)
             Ecosystem = 'Chromium'
+            Active = (@($items | Where-Object { $_.Active }).Count -gt 0)
         }
     }
     return $results
@@ -319,6 +363,7 @@ function Test-IsFirefoxSystemAddon {
 }
 
 function Get-FirefoxExtensions {
+    param([switch]$IncludeInactive)
     $appData = [Environment]::GetFolderPath('ApplicationData')
     $firefoxRoot = Join-Path $appData 'Mozilla\Firefox'
     $profilesIniPath = Join-Path $firefoxRoot 'profiles.ini'
@@ -336,6 +381,7 @@ function Get-FirefoxExtensions {
         foreach ($addon in @($extensionData.addons)) {
             if ($null -eq $addon -or [string]$addon.type -ne 'extension') { continue }
             if (Test-IsFirefoxSystemAddon -Addon $addon) { continue }
+            if (-not $IncludeInactive -and $addon.active -ne $true) { continue }
             $extensionId = [string]$addon.id
             if ([string]::IsNullOrWhiteSpace($extensionId)) { continue }
             $name = ''
@@ -375,6 +421,7 @@ function Get-FirefoxExtensions {
             ExtensionId = $group.Name
             Name = $first.Name
             Version = $displayVersion
+            Versions = $uniqueVersions
             Publisher = $first.Publisher
             IconPath = if ($null -ne $iconItem) { $iconItem.IconPath } else { '' }
             Active = (@($items | Where-Object { $_.Active }).Count -gt 0)
