@@ -543,8 +543,8 @@ async function saveCloudSettings(evt) {
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || '云端链接保存失败');
     closeCloudModal();
-    showToast('云端清单链接已保存，正在同步...', false, true);
-    await syncCloudRules();
+    showToast(`云端清单已验证：白 ${data.whiteCount}｜待 ${data.pendingCount}｜黑 ${data.blackCount}，正在刷新...`, false);
+    setTimeout(() => { window.location.href = '/'; }, 700);
   } catch (e) {
     showToast('云端设置失败: ' + e.message, true);
   } finally {
@@ -565,8 +565,8 @@ async function syncCloudRules() {
       openCloudModal();
       return;
     }
-    showToast(`同步完成：更新了 ${data.count} 条规则，正在刷新...`, false);
-    setTimeout(() => { window.location.href = '/?refresh=1'; }, 1000);
+    showToast(data.usingCache ? '云端暂时不可用，已使用上次完整快照，正在刷新...' : `同步完成：验证了 ${data.count} 条规则，正在刷新...`, false);
+    setTimeout(() => { window.location.href = '/'; }, 1000);
   } catch (e) {
     showToast('云端同步失败，本地清单未改变: ' + e.message, true);
   } finally {

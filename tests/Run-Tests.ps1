@@ -29,6 +29,22 @@ $legacyVideoKitMatcher = New-RuleMatcher -Rules @($legacyVideoKitRule) -ItemType
 Assert-True ($null -eq (Find-FirstMatchingRule -Rules $legacyVideoKitMatcher -ItemType '软件' -DisplayName 'VideoKit 4.4.27' -Publisher '' -ExtensionId '' -Version '4.4.27')) '旧规则中内嵌的目标版本不应误判为当前版本匹配。'
 Assert-True ($null -ne (Find-FirstMatchingRule -Rules $legacyVideoKitMatcher -ItemType '软件' -DisplayName 'VideoKit 4.4.27' -Publisher '' -ExtensionId '' -Version '4.4.27' -IgnoreVersion)) '旧规则名称中的版本号应被自动识别并触发版本变化。'
 
+$fullWidthRule = [PSCustomObject]@{ 类型='软件'; 匹配方式='精确'; 软件名关键词='B＆O Audio Control'; 插件ID=''; 版本号='1.47.308.0'; 发布者='' }
+$fullWidthMatcher = New-RuleMatcher -Rules @($fullWidthRule) -ItemType '软件'
+Assert-True ($null -ne (Find-FirstMatchingRule -Rules $fullWidthMatcher -ItemType '软件' -DisplayName 'B&O Audio Control' -Publisher '' -ExtensionId '' -Version '1.47.308.0')) '全角与半角标点差异不应导致云端白名单匹配失败。'
+Assert-True ((Get-RuleIdentity -ItemType '软件' -ExtensionId '' -NamePattern 'B＆O Audio Control') -eq (Get-RuleIdentity -ItemType '软件' -ExtensionId '' -NamePattern 'B&O Audio Control')) '云端和本地规则身份也必须统一全角与半角字符。'
+$publisherRule = [PSCustomObject]@{ 类型='软件'; 匹配方式='精确'; 软件名关键词='VeraCrypt'; 插件ID=''; 版本号='1.26.24'; 发布者='IDRIX' }
+$publisherMatcher = New-RuleMatcher -Rules @($publisherRule) -ItemType '软件'
+Assert-True ($null -eq (Find-FirstMatchingRule -Rules $publisherMatcher -ItemType '软件' -DisplayName 'VeraCrypt' -Publisher 'AM Crypto' -ExtensionId '' -Version '1.26.24')) '发布者不一致时不能直接判定白名单命中。'
+Assert-True ($null -ne (Find-FirstMatchingRule -Rules $publisherMatcher -ItemType '软件' -DisplayName 'VeraCrypt' -Publisher 'AM Crypto' -ExtensionId '' -Version '1.26.24' -IgnorePublisher)) '发布者变化必须能被识别并给出明确原因。'
+$publisherResult = @(Get-ComplianceResult -Installed @([PSCustomObject]@{ 名称='VeraCrypt'; 版本='1.26.24'; 发布者='AM Crypto'; 安装日期=''; 安装路径=''; 图标路径=''; 图标索引=0 }) -BlackRules @() -WhiteRules @($publisherRule) -PendingRules @() -ItemType '软件')
+Assert-True ($publisherResult.Count -eq 1 -and $publisherResult[0].状态 -eq '待定' -and $publisherResult[0].原因 -match '发布者不同') '白名单近似匹配必须在待定区明确显示发布者差异。'
+$emptyRuleResult = @(Get-ComplianceResult -Installed @([PSCustomObject]@{ 名称='Unknown Tool'; 版本='1.0'; 发布者=''; 安装日期=''; 安装路径=''; 图标路径=''; 图标索引=0 }) -BlackRules @() -WhiteRules @() -PendingRules @() -ItemType '软件')
+Assert-True ($emptyRuleResult.Count -eq 1 -and $emptyRuleResult[0].状态 -eq '待定' -and $null -eq $emptyRuleResult[0].MatchedRule) '未配置任何规则时，扫描结果必须正常进入待定。'
+Assert-XlsxArchiveComplete -Path (Join-Path $root 'list_template.xlsx')
+$cloudStats = Get-CloudRuleStats -AllRules ([PSCustomObject]@{ '白名单'=@(1,2); '待定'=@(3); '黑名单'=@(4,5,6) })
+Assert-True ($cloudStats.TotalCount -eq 6 -and $cloudStats.WhiteCount -eq 2 -and $cloudStats.PendingCount -eq 1 -and $cloudStats.BlackCount -eq 3) '云端规则分表数量统计必须准确。'
+
 $rules = @(
     [PSCustomObject]@{ 类型='软件'; 匹配方式='包含'; 软件名关键词='Tool'; 插件ID=''; 版本号=''; 发布者='' },
     [PSCustomObject]@{ 类型='软件'; 匹配方式='精确'; 软件名关键词='Tool Pro'; 插件ID=''; 版本号=''; 发布者='' }

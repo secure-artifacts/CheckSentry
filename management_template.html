@@ -621,13 +621,24 @@ function showToast(msg, isError) {
   setTimeout(() => t.classList.remove('show'), 2000);
 }
 
-function updateCloudStatus(configured) {
+function updateCloudStatus(configured, syncState) {
   cloudConfigured = configured === true;
   const status = document.getElementById('cloudStatus');
   if (!status) return;
-  status.textContent = cloudConfigured ? '云端：已配置' : '云端：未配置';
-  status.classList.toggle('configured', cloudConfigured);
-  status.title = cloudConfigured ? '已配置 Google Sheets 只读规则模板' : '尚未配置 Google Sheets 只读规则模板';
+  if (!cloudConfigured) {
+    status.textContent = '云端：未配置';
+    status.classList.remove('configured');
+    status.title = '尚未配置 Google Sheets 只读规则模板';
+    return;
+  }
+  const state = syncState || {};
+  const mode = state.UsingCache || state.usingCache ? '缓存' : (state.Status || state.status || '已配置');
+  const white = state.WhiteCount ?? state.whiteCount ?? 0;
+  const pending = state.PendingCount ?? state.pendingCount ?? 0;
+  const black = state.BlackCount ?? state.blackCount ?? 0;
+  status.textContent = `云端：${mode}｜白 ${white}｜待 ${pending}｜黑 ${black}`;
+  status.classList.toggle('configured', mode !== '失败');
+  status.title = state.Message || state.message || '云端规则状态';
 }
 
 async function loadCloudSettings() {
@@ -636,7 +647,7 @@ async function loadCloudSettings() {
     const data = await res.json();
     if (data.ok) {
       document.getElementById('cloudUrl').value = data.url || '';
-      updateCloudStatus(data.configured === true);
+      updateCloudStatus(data.configured === true, data.syncState);
     }
   } catch (e) {
     console.warn('云端清单设置读取失败', e);
@@ -663,10 +674,11 @@ async function saveCloudSettings(evt) {
     const res = await apiPost('/api/manage/cloudSettings', { url: url });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || '云端链接保存失败');
-    updateCloudStatus(true);
+    updateCloudStatus(true, data);
     closeCloudModal();
-    showToast('云端清单链接已保存，正在同步...', false, true);
-    await syncCloudRules();
+    selectedRuleKeys = {};
+    showToast(`云端清单已验证：白 ${data.whiteCount}｜待 ${data.pendingCount}｜黑 ${data.blackCount}`, false);
+    await loadData();
   } catch (e) {
     showToast('云端设置失败: ' + e.message, true);
   } finally {
@@ -692,9 +704,9 @@ async function syncCloudRules() {
       openCloudModal();
       return;
     }
-    updateCloudStatus(true);
+    updateCloudStatus(true, data);
     selectedRuleKeys = {};
-    showToast(data.changed ? ('云端同步完成：' + data.count + ' 条规则') : '云端规则已是最新', false);
+    showToast(data.usingCache ? '云端暂时不可用，已使用上次完整快照' : (data.changed ? ('云端同步完成：' + data.count + ' 条规则') : '云端规则已完整验证'), false);
     await loadData();
   } catch (e) {
     showToast('云端同步失败，本地清单未改变: ' + e.message, true);

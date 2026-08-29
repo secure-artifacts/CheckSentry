@@ -2,6 +2,7 @@
 CheckSentry.settings.json
 CheckSentry.cloud.json
 list.xlsx
+CloudCache/
 
 # macOS / Windows local metadata
 .DS_Store
