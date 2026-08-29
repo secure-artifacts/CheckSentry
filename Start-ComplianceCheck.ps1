@@ -6,12 +6,18 @@
 
 param(
     [string]$ListPath = '',
+    [string]$LogPath = '',
     [int]$Port = 8787,
     [switch]$IncludeSystemComponents,
     [switch]$IncludeInactiveExtensions,
     [switch]$ScanAllUsers,
     [switch]$LibraryOnly
 )
+
+$script:Utf8ConsoleEncoding = New-Object System.Text.UTF8Encoding($false)
+try { [Console]::InputEncoding = $script:Utf8ConsoleEncoding } catch {}
+try { [Console]::OutputEncoding = $script:Utf8ConsoleEncoding } catch {}
+$global:OutputEncoding = $script:Utf8ConsoleEncoding
 
 $ErrorActionPreference = 'Stop'
 $script:AllowedSheets = @('白名单', '待定', '黑名单')
@@ -645,7 +651,7 @@ function Convert-CloudWorksheetToRules {
         }
     }
     for ($row = 2; $row -le $Worksheet.Dimension.End.Row; $row++) {
-        $hasValue = $false
+        $hasRuleIdentity = $false
         $ordered = [ordered]@{}
         for ($index = 0; $index -lt $cloudHeaders.Count; $index++) {
             $column = $index + 2
@@ -656,10 +662,10 @@ function Convert-CloudWorksheetToRules {
                 $value = Get-UserNoteText $value
                 $ordered['备注/原因链接'] = Get-CellHyperlinkUrl -Cell $cell
             }
-            if ($null -ne $value -and -not [string]::IsNullOrWhiteSpace([string]$value)) { $hasValue = $true }
+            if ($index -le 3 -and $null -ne $value -and -not [string]::IsNullOrWhiteSpace([string]$value)) { $hasRuleIdentity = $true }
             $ordered[$header] = $value
         }
-        if ($hasValue) {
+        if ($hasRuleIdentity) {
             $cloudData = [PSCustomObject]@{
                 type = [string]$ordered['类型']
                 extId = [string]$ordered['插件ID']
@@ -672,7 +678,33 @@ function Convert-CloudWorksheetToRules {
                 addedBy = [string]$ordered['添加人']
                 addedTime = [string]$ordered['添加时间']
             }
-            $validatedRule = Convert-InputToRule -Data $cloudData -TargetSheet $SheetName
+            try {
+                $validatedRule = Convert-InputToRule -Data $cloudData -TargetSheet $SheetName
+            } catch {
+                $detail = [string]$_.Exception.Message
+                $fieldName = 'B:K'
+                $columnName = ''
+                $fieldColumns = [ordered]@{
+                    '类型' = 'B'; '插件ID' = 'C'; '匹配方式' = 'D'; '软件名关键词' = 'E';
+                    '版本号' = 'F'; '发布者' = 'G'; '备注/原因' = 'I'; '添加人' = 'J'; '添加时间' = 'K'
+                }
+                foreach ($candidateField in $fieldColumns.Keys) {
+                    if ($detail -match [regex]::Escape($candidateField)) {
+                        $fieldName = $candidateField
+                        $columnName = [string]$fieldColumns[$candidateField]
+                        break
+                    }
+                }
+                $location = if ($columnName) { "$columnName$row（$fieldName）" } else { "第 $row 行 B:K" }
+                $preview = ''
+                if ($columnName) {
+                    $rawValue = [string]$ordered[$fieldName]
+                    $singleLine = ($rawValue -replace '[\r\n\t]+', ' ').Trim()
+                    if ($singleLine.Length -gt 60) { $singleLine = $singleLine.Substring(0, 60) + '…' }
+                    $preview = " 当前值长度：$($rawValue.Length)；预览：【$singleLine】。"
+                }
+                throw "云端工作表【$SheetName】单元格 $location 校验失败：$detail$preview"
+            }
             $validatedRule.添加人 = [string]$ordered['添加人']
             $validatedRule.添加时间 = [string]$ordered['添加时间']
             $rules += $validatedRule
@@ -702,7 +734,7 @@ function Import-CloudRuleSheets {
             if ($null -ne $package) { $package.Dispose() }
         }
     }
-    throw "读取云端规则模板失败。请确认三个工作表的 B:K 表头正确且文件可导出。详细错误：$($lastError.Exception.Message)"
+    throw "读取云端规则模板失败。程序只读取【待定、白名单、黑名单】，其他工作表会自动忽略。请确认这三个工作表的 B:K 表头正确且文件可导出。详细错误：$($lastError.Exception.Message)"
 }
 
 function Test-ListFileAvailable {
@@ -1577,7 +1609,7 @@ function Convert-InputToRule {
         插件ID = $extensionId
         匹配方式 = $matchType
         软件名关键词 = $namePattern
-        版本号 = Get-LimitedText -Value $Data.version -FieldName '版本号' -MaximumLength 128
+        版本号 = Get-LimitedText -Value $Data.version -FieldName '版本号' -MaximumLength 2048
         发布者 = Get-LimitedText -Value $Data.publisher -FieldName '发布者' -MaximumLength 256
         '状态/分类' = Get-CanonicalRuleStatus -SheetName $sheet
         '备注/原因' = $note
@@ -1731,13 +1763,32 @@ function ConvertTo-MatchComparableText {
     return [regex]::Replace($normalized, '\s+', ' ').Trim()
 }
 
+function Get-RuleVersionPatterns {
+    param([string]$RuleVersion)
+    $text = ConvertTo-MatchComparableText $RuleVersion
+    if ([string]::IsNullOrWhiteSpace($text)) { return @() }
+    if (($text.StartsWith('[') -and $text.EndsWith(']')) -or ($text.StartsWith('(') -and $text.EndsWith(')'))) {
+        $text = $text.Substring(1, $text.Length - 2)
+    }
+    $patterns = @()
+    foreach ($part in [regex]::Split($text, '[,，;；\r\n]+')) {
+        $pattern = (ConvertTo-MatchComparableText $part).Trim('"', "'", ' ')
+        if (-not [string]::IsNullOrWhiteSpace($pattern)) { $patterns += $pattern }
+    }
+    if ($patterns.Count -eq 0) { return @($text) }
+    return $patterns
+}
+
 function Test-VersionMatch {
     param([object]$InstalledVersion, [string]$RuleVersion)
     if ([string]::IsNullOrWhiteSpace($RuleVersion)) { return $true }
-    $normalizedRuleVersion = ConvertTo-MatchComparableText $RuleVersion
+    $rulePatterns = @(Get-RuleVersionPatterns -RuleVersion $RuleVersion)
     foreach ($candidate in @($InstalledVersion)) {
         $candidateText = ConvertTo-MatchComparableText $candidate
-        if (-not [string]::IsNullOrWhiteSpace($candidateText) -and $candidateText -like $normalizedRuleVersion) { return $true }
+        if ([string]::IsNullOrWhiteSpace($candidateText)) { continue }
+        foreach ($rulePattern in $rulePatterns) {
+            if ($candidateText -like $rulePattern) { return $true }
+        }
     }
     return $false
 }
@@ -1750,7 +1801,6 @@ function Get-EffectiveRuleMatchFields {
     $embeddedVersion = $false
 
     if (([string]$Rule.'类型' -eq '软件' -or [string]::IsNullOrWhiteSpace([string]$Rule.'类型')) -and
-        [string]::IsNullOrWhiteSpace($version) -and
         -not [string]::IsNullOrWhiteSpace($namePattern)) {
         $nameVersionMatch = [regex]::Match(
             $namePattern.Trim(),
@@ -1759,7 +1809,7 @@ function Get-EffectiveRuleMatchFields {
         )
         if ($nameVersionMatch.Success -and -not [string]::IsNullOrWhiteSpace($nameVersionMatch.Groups['base'].Value)) {
             $namePattern = $nameVersionMatch.Groups['base'].Value.Trim()
-            $version = $nameVersionMatch.Groups['version'].Value
+            if ([string]::IsNullOrWhiteSpace($version)) { $version = $nameVersionMatch.Groups['version'].Value }
             $embeddedVersion = $true
         }
     }
@@ -2470,7 +2520,7 @@ function Get-RowHtml {
           <input type="hidden" name="matchedRuleId" value="$(ConvertTo-HtmlEncodedText $Item.MatchedRuleId)">
           <label>匹配方式<select name="matchType">$matchOptions</select></label>
           <label>关键词<input type="text" name="namePattern" value="$defaultNamePattern" maxlength="512"></label>
-          <label>版本号（默认当前版本，清空=不锁版本）<input type="text" name="version" value="$defaultVersion" maxlength="128"><button type="button" class="use-current-version" data-current-version="$version">用当前版本</button></label>
+          <label>版本号（默认当前版本，清空=不锁版本）<input type="text" name="version" value="$defaultVersion" maxlength="2048"><button type="button" class="use-current-version" data-current-version="$version">用当前版本</button></label>
                     <label>发布者<input type="text" name="publisher" value="$publisherText" maxlength="256"></label>
           <label>备注/原因<input type="text" name="note" value="$noteReason" maxlength="2000"><input type="hidden" name="noteLink" value="$noteLink"></label>
           <label>添加人<input type="text" value="$addedBy" readonly></label>
@@ -2995,7 +3045,15 @@ try {
     Show-RuleConflictWarnings -Path $ListPath
     Start-ReportServer -RequestedPort $Port -Path $ListPath -IncludeSystem $IncludeSystemComponents.IsPresent
 } catch {
-    Write-Host "CheckSentry 启动失败：$($_.Exception.Message)" -ForegroundColor Red
+    $startupFailureMessage = "CheckSentry 启动失败：$($_.Exception.Message)"
+    Write-Host $startupFailureMessage -ForegroundColor Red
+    if (-not [string]::IsNullOrWhiteSpace($LogPath)) {
+        try {
+            $logDirectory = [System.IO.Path]::GetDirectoryName([System.IO.Path]::GetFullPath($LogPath))
+            if (-not [string]::IsNullOrWhiteSpace($logDirectory)) { [System.IO.Directory]::CreateDirectory($logDirectory) | Out-Null }
+            [System.IO.File]::AppendAllText($LogPath, ((Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + ' ' + $startupFailureMessage + [Environment]::NewLine), $script:Utf8ConsoleEncoding)
+        } catch {}
+    }
     exit 1
 }
 }

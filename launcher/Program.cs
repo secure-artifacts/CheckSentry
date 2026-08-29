@@ -14,11 +14,20 @@ internal static class Program
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern int MessageBox(IntPtr handle, string text, string caption, uint type);
 
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetConsoleCP(uint codePageId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetConsoleOutputCP(uint codePageId);
+
+    private static readonly UTF8Encoding Utf8NoBom = new(false);
+
     private static int Main(string[] args)
     {
         string logPath = string.Empty;
         try
         {
+            ConfigureConsoleEncoding();
             var forwarded = args.Where(a => !string.Equals(a, "--portable", StringComparison.OrdinalIgnoreCase)).ToArray();
             var dataDirectory = Path.GetFullPath(AppContext.BaseDirectory);
             Directory.CreateDirectory(dataDirectory);
@@ -26,6 +35,7 @@ internal static class Program
             var logDirectory = Path.Combine(dataDirectory, "Logs");
             Directory.CreateDirectory(logDirectory);
             logPath = Path.Combine(logDirectory, "CheckSentry-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".log");
+            File.WriteAllText(logPath, "CheckSentry started " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + Environment.NewLine, Utf8NoBom);
 
             var assembly = typeof(Program).Assembly;
             var runtimeDirectory = Path.Combine(dataDirectory, ".CheckSentryRuntime", assembly.ManifestModule.ModuleVersionId.ToString("N"));
@@ -38,25 +48,17 @@ internal static class Program
                 FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe"),
                 UseShellExecute = false,
                 WorkingDirectory = runtimeDirectory,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                StandardOutputEncoding = Encoding.UTF8,
-                StandardErrorEncoding = Encoding.UTF8
+                RedirectStandardOutput = false,
+                RedirectStandardError = false
             };
-            foreach (var argument in new[] { "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath, "-ListPath", listPath })
+            foreach (var argument in new[] { "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath, "-ListPath", listPath, "-LogPath", logPath })
                 startInfo.ArgumentList.Add(argument);
             foreach (var argument in forwarded)
                 startInfo.ArgumentList.Add(argument);
 
-            using var logWriter = new StreamWriter(logPath, append: false, new UTF8Encoding(false)) { AutoFlush = true };
-            using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
-            process.OutputDataReceived += (_, eventArgs) => WriteProcessLine(eventArgs.Data, logWriter, false);
-            process.ErrorDataReceived += (_, eventArgs) => WriteProcessLine(eventArgs.Data, logWriter, true);
+            using var process = new Process { StartInfo = startInfo };
             if (!process.Start()) throw new InvalidOperationException("无法启动 Windows PowerShell。 ");
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
             process.WaitForExit();
-            process.WaitForExit(1000);
             if (process.ExitCode != 0)
             {
                 var message = "CheckSentry 启动失败。\n\n错误日志：\n" + logPath;
@@ -75,6 +77,14 @@ internal static class Program
             catch { Console.Error.WriteLine(message); }
             return 1;
         }
+    }
+
+    private static void ConfigureConsoleEncoding()
+    {
+        SetConsoleCP(65001);
+        SetConsoleOutputCP(65001);
+        try { Console.InputEncoding = Utf8NoBom; } catch (IOException) { }
+        try { Console.OutputEncoding = Utf8NoBom; } catch (IOException) { }
     }
 
     private static void ExtractPayload(Assembly assembly, string runtimeDirectory)
@@ -136,13 +146,4 @@ internal static class Program
         if (!Directory.EnumerateFileSystemEntries(legacyDirectory).Any()) Directory.Delete(legacyDirectory);
     }
 
-    private static void WriteProcessLine(string? line, TextWriter logWriter, bool error)
-    {
-        if (line is null) return;
-        lock (logWriter)
-        {
-            logWriter.WriteLine(line);
-            if (error) Console.Error.WriteLine(line); else Console.WriteLine(line);
-        }
-    }
 }
