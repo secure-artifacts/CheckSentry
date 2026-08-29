@@ -1459,16 +1459,57 @@ function Test-VersionMatch {
     return $false
 }
 
+function Get-EffectiveRuleMatchFields {
+    param($Rule)
+    $matchType = [string]$Rule.'匹配方式'
+    $namePattern = [string]$Rule.'软件名关键词'
+    $version = [string]$Rule.'版本号'
+    $embeddedVersion = $false
+
+    if (([string]$Rule.'类型' -eq '软件' -or [string]::IsNullOrWhiteSpace([string]$Rule.'类型')) -and
+        [string]::IsNullOrWhiteSpace($version) -and
+        -not [string]::IsNullOrWhiteSpace($namePattern)) {
+        $nameVersionMatch = [regex]::Match(
+            $namePattern.Trim(),
+            '^(?<base>.+?)(?:\s+|\s*[-–—_/]\s*)(?:v(?:ersion)?\s*)?\(?(?<version>\d+(?:\.\d+)+(?:[-+][0-9A-Za-z.-]+)?)\)?$',
+            [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+        )
+        if ($nameVersionMatch.Success -and -not [string]::IsNullOrWhiteSpace($nameVersionMatch.Groups['base'].Value)) {
+            $namePattern = $nameVersionMatch.Groups['base'].Value.Trim()
+            $version = $nameVersionMatch.Groups['version'].Value
+            $embeddedVersion = $true
+        }
+    }
+
+    return [PSCustomObject]@{
+        MatchType = $matchType
+        NamePattern = $namePattern
+        Version = $version
+        EmbeddedVersion = $embeddedVersion
+    }
+}
+
 function Test-NameMatch {
     param([string]$InstalledName, $Rule)
     if ($Rule.'匹配方式' -eq '插件ID精确') {
         if ([string]::IsNullOrWhiteSpace([string]$Rule.'插件ID')) { return $false }
         return [string]::Equals($InstalledName, [string]$Rule.'插件ID', [System.StringComparison]::OrdinalIgnoreCase)
     }
-    $pattern = [string]$Rule.'软件名关键词'
+    $effectiveRule = Get-EffectiveRuleMatchFields -Rule $Rule
+    $pattern = [string]$effectiveRule.NamePattern
     if ([string]::IsNullOrWhiteSpace($pattern)) { return $false }
-    switch ([string]$Rule.'匹配方式') {
-        '精确' { return [string]::Equals($InstalledName, $pattern, [System.StringComparison]::OrdinalIgnoreCase) }
+    switch ([string]$effectiveRule.MatchType) {
+        '精确' {
+            if ($effectiveRule.EmbeddedVersion) {
+                $installedBaseName = [regex]::Replace(
+                    $InstalledName.Trim(),
+                    '(?i)(?:\s+|\s*[-–—_/]\s*)(?:v(?:ersion)?\s*)?\(?\d+(?:\.\d+)+(?:[-+][0-9A-Za-z.-]+)?\)?$',
+                    ''
+                ).Trim()
+                return [string]::Equals($installedBaseName, $pattern, [System.StringComparison]::OrdinalIgnoreCase)
+            }
+            return [string]::Equals($InstalledName, $pattern, [System.StringComparison]::OrdinalIgnoreCase)
+        }
         '包含' { return $InstalledName.IndexOf($pattern, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 }
         '通配符' { return $InstalledName -like $pattern }
         '正则' {
@@ -1498,13 +1539,14 @@ function New-RuleMatcher {
         $order++
         $ruleType = if ([string]::IsNullOrWhiteSpace([string]$rule.'类型')) { '软件' } else { [string]$rule.'类型' }
         if ($ruleType -ne $ItemType) { continue }
-        $matchType = [string]$rule.'匹配方式'
+        $effectiveRule = Get-EffectiveRuleMatchFields -Rule $rule
+        $matchType = [string]$effectiveRule.MatchType
         if ($matchType -eq '插件ID精确') {
             $key = ([string]$rule.'插件ID').Trim()
             if (-not $extensionIds.ContainsKey($key)) { $extensionIds[$key] = @() }
             $extensionIds[$key] = @($extensionIds[$key]) + $entry
-        } elseif ($matchType -eq '精确') {
-            $key = ([string]$rule.'软件名关键词').Trim()
+        } elseif ($matchType -eq '精确' -and -not $effectiveRule.EmbeddedVersion) {
+            $key = ([string]$effectiveRule.NamePattern).Trim()
             if (-not $exactNames.ContainsKey($key)) { $exactNames[$key] = @() }
             $exactNames[$key] = @($exactNames[$key]) + $entry
         } else {
@@ -1530,7 +1572,8 @@ function Find-FirstMatchingRule {
         $testName = if ($rule.'匹配方式' -eq '插件ID精确') { $ExtensionId } else { $DisplayName }
         if (-not (Test-NameMatch -InstalledName $testName -Rule $rule)) { continue }
         if (-not (Test-PublisherMatch -InstalledPublisher $Publisher -RulePublisher $rule.'发布者')) { continue }
-        if (-not $IgnoreVersion -and -not (Test-VersionMatch -InstalledVersion $Version -RuleVersion ([string]$rule.'版本号'))) { continue }
+        $effectiveRule = Get-EffectiveRuleMatchFields -Rule $rule
+        if (-not $IgnoreVersion -and -not (Test-VersionMatch -InstalledVersion $Version -RuleVersion ([string]$effectiveRule.Version))) { continue }
         return $rule
     }
     return $null
@@ -2027,6 +2070,30 @@ function ConvertTo-SafeNoteHtml {
     })
 }
 
+function Get-DefaultRuleFields {
+    param($Item)
+    $itemType = [string]$Item.类型
+    $namePattern = [string]$Item.名称
+    $version = [string]$Item.版本
+    $matchType = if ($itemType -eq '软件') { '精确' } else { '插件ID精确' }
+
+    if ($itemType -eq '软件' -and -not [string]::IsNullOrWhiteSpace($version)) {
+        $escapedVersion = [regex]::Escape($version.Trim())
+        $suffixPattern = '(?i)\s*(?:[-–—_/]\s*)?(?:v(?:ersion)?\s*)?\(?' + $escapedVersion + '\)?\s*$'
+        $baseName = [regex]::Replace($namePattern, $suffixPattern, '').Trim()
+        if (-not [string]::IsNullOrWhiteSpace($baseName) -and $baseName -ne $namePattern.Trim()) {
+            $namePattern = $baseName
+            $matchType = '包含'
+        }
+    }
+
+    return [PSCustomObject]@{
+        MatchType = $matchType
+        NamePattern = $namePattern
+        Version = $version
+    }
+}
+
 function Get-RowHtml {
     param($Item, [bool]$NeedsAction)
     $name = ConvertTo-HtmlEncodedText $Item.名称
@@ -2036,6 +2103,9 @@ function Get-RowHtml {
         $reason = Get-UserNoteText $Item.原因
     $status = ConvertTo-HtmlEncodedText $Item.状态
     $matchedRule = $Item.MatchedRule
+    $defaultRule = Get-DefaultRuleFields -Item $Item
+    $defaultNamePattern = ConvertTo-HtmlEncodedText $defaultRule.NamePattern
+    $defaultVersion = ConvertTo-HtmlEncodedText $defaultRule.Version
     $noteReason = if ($null -ne $matchedRule) { ConvertTo-HtmlEncodedText $matchedRule.'备注/原因' } else { '' }
     $noteLink = if ($null -ne $matchedRule) { ConvertTo-HtmlEncodedText $matchedRule.'备注/原因链接' } else { '' }
     $addedBy = if ($null -ne $matchedRule) { ConvertTo-HtmlEncodedText $matchedRule.'添加人' } else { '' }
@@ -2071,7 +2141,9 @@ function Get-RowHtml {
 
     $actionHtml = ''
     if ($NeedsAction) {
-        $matchOptions = if ($Item.类型 -eq '软件') {
+        $matchOptions = if ($Item.类型 -eq '软件' -and $defaultRule.MatchType -eq '包含') {
+            '<option value="精确">精确</option><option value="包含" selected>包含</option><option value="通配符">通配符</option><option value="正则">正则</option>'
+        } elseif ($Item.类型 -eq '软件') {
             '<option value="精确" selected>精确</option><option value="包含">包含</option><option value="通配符">通配符</option><option value="正则">正则</option>'
         } else {
             '<option value="插件ID精确" selected>插件ID精确</option><option value="包含">包含(按名称)</option><option value="通配符">通配符(按名称)</option><option value="正则">正则(按名称)</option>'
@@ -2083,8 +2155,8 @@ function Get-RowHtml {
           <input type="hidden" name="matchedSheet" value="$(ConvertTo-HtmlEncodedText $Item.MatchedSheet)">
           <input type="hidden" name="matchedRuleId" value="$(ConvertTo-HtmlEncodedText $Item.MatchedRuleId)">
           <label>匹配方式<select name="matchType">$matchOptions</select></label>
-          <label>关键词<input type="text" name="namePattern" value="$name" maxlength="512"></label>
-          <label>版本号（留空=不锁版本）<input type="text" name="version" value="" maxlength="128"><button type="button" class="use-current-version" data-current-version="$version">用当前版本</button></label>
+          <label>关键词<input type="text" name="namePattern" value="$defaultNamePattern" maxlength="512"></label>
+          <label>版本号（默认当前版本，清空=不锁版本）<input type="text" name="version" value="$defaultVersion" maxlength="128"><button type="button" class="use-current-version" data-current-version="$version">用当前版本</button></label>
                     <label>发布者<input type="text" name="publisher" value="$publisherText" maxlength="256"></label>
           <label>备注/原因<input type="text" name="note" value="$noteReason" maxlength="2000"><input type="hidden" name="noteLink" value="$noteLink"></label>
           <label>添加人<input type="text" value="$addedBy" readonly></label>

@@ -19,6 +19,16 @@ Assert-True (Test-VersionMatch -InstalledVersion @('1.2.0','1.3.0') -RuleVersion
 Assert-True (-not (Test-VersionMatch -InstalledVersion @('1.2.0','1.3.0') -RuleVersion '2.*')) '不存在的版本不应匹配。'
 Assert-True ((Get-SafeChildPath -BasePath $root -RelativePath '..\outside.txt') -eq '') '安全路径函数必须拒绝目录穿越。'
 
+$videoKitDefaults = Get-DefaultRuleFields -Item ([PSCustomObject]@{ 类型='软件'; 名称='VideoKit 4.4.27'; 版本='4.4.27' })
+Assert-True ($videoKitDefaults.MatchType -eq '包含') '名称末尾包含版本的软件应默认使用包含匹配。'
+Assert-True ($videoKitDefaults.NamePattern -eq 'VideoKit') '软件规则关键词应自动移除名称末尾的版本号。'
+Assert-True ($videoKitDefaults.Version -eq '4.4.27') '复制或批量添加规则时必须自动填写当前版本号。'
+
+$legacyVideoKitRule = [PSCustomObject]@{ 类型='软件'; 匹配方式='精确'; 软件名关键词='VideoKit 4.4.28'; 插件ID=''; 版本号=''; 发布者='' }
+$legacyVideoKitMatcher = New-RuleMatcher -Rules @($legacyVideoKitRule) -ItemType '软件'
+Assert-True ($null -eq (Find-FirstMatchingRule -Rules $legacyVideoKitMatcher -ItemType '软件' -DisplayName 'VideoKit 4.4.27' -Publisher '' -ExtensionId '' -Version '4.4.27')) '旧规则中内嵌的目标版本不应误判为当前版本匹配。'
+Assert-True ($null -ne (Find-FirstMatchingRule -Rules $legacyVideoKitMatcher -ItemType '软件' -DisplayName 'VideoKit 4.4.27' -Publisher '' -ExtensionId '' -Version '4.4.27' -IgnoreVersion)) '旧规则名称中的版本号应被自动识别并触发版本变化。'
+
 $rules = @(
     [PSCustomObject]@{ 类型='软件'; 匹配方式='包含'; 软件名关键词='Tool'; 插件ID=''; 版本号=''; 发布者='' },
     [PSCustomObject]@{ 类型='软件'; 匹配方式='精确'; 软件名关键词='Tool Pro'; 插件ID=''; 版本号=''; 发布者='' }
