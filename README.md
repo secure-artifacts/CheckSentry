@@ -85,11 +85,13 @@ powershell.exe -NoProfile -File .\Start-ComplianceCheck.ps1 -Port 8790 -ListPath
 
 版本号留空表示不限制；白名单版本可使用 `128.*` 等通配符。
 
+规则去重不使用安装路径。软件规则身份由“标准化名称 + 发布者 + 版本号”共同确定；插件规则身份由“类型 + 插件 ID”确定。因此 VeraCrypt 的 IDRIX/AM Crypto 版本、4K Video Downloader+ 的 Open Media/InterPromo 版本可以同时保留，只有上述身份字段完全相同的行才是真重复。安装路径和卸载标识只属于当前电脑的扫描信息，不参与跨电脑规则比较。
+
 ## 云端只读规则模板
 
 云端模板是可选功能，默认不启用。你可以在“清单维护”页的“云端清单设置”中保存 Google Sheets 分享链接。表格必须包含“白名单”“待定”“黑名单”三个工作表；每个工作表只要求 B:K 列存在现有十列表头（对应本地规则表的 `类型` 至 `添加时间`）。A 列 ID、L 列及以后列、以及其他工作表均不会被读取。启动 CheckSentry 时，工具会尝试下载该表格的 XLSX 导出文件，并与本地 `list.xlsx` 离线合并；也可以在维护页点击“立即同步”。
 
-同步只执行从 Google Sheets 到本地的单向下载，不会上传软件清单、浏览器插件、版本、安装路径、用户名或报告结果。云端存在的规则按标准化对象身份更新本地同身份规则的所有字段（包括匹配字段、版本、发布者、所属工作表，以及备注/原因、添加人和添加时间），即云端无条件覆盖本地。云端没有的本地私有规则会保留。
+同步只执行从 Google Sheets 到本地的单向下载，不会上传软件清单、浏览器插件、版本、安装路径、用户名或报告结果。云端存在的规则按复合身份更新本地同身份规则的所有字段；上一次由同一云端链接管理、但本次已经删除或改版的旧身份会同步移除，避免旧版本残留。未被该云端链接管理的本地私有规则保留。
 
 首次保存链接时，工具会先重试下载、完整读取 XLSX 压缩包、校验三张规则表，并在云端内容尚未建立成功指纹或发生变化时连续下载两次；两次标准化规则指纹一致后才启用链接。成功规则会原子写入本地并保存到 EXE 同目录的 `CloudCache/last-good.xlsx`。后续网络故障时使用最后一次完整验证快照并在界面显示黄色状态；如果已配置云端但远程规则和成功快照都不可用，工具会停止扫描，避免把白名单软件错误加入待定。未配置云端链接时仍按空白或现有本地清单正常扫描，未知对象进入待定。注意：云端表格中的超链接请使用纯文本形式填写，同步时为了兼容性会剥离 Google Sheets 原生 XML 超链接。
 
@@ -144,7 +146,7 @@ powershell.exe -NoProfile -File .\Start-ComplianceCheck.ps1 -Port 8790 -ListPath
 - `CheckSentry.exe`
 - `Modules/ImportExcel/7.8.10`
 
-源码维护者先运行 `Prepare-Dependencies.ps1` 固定离线依赖，然后执行 `tests/Run-Tests.ps1`。正式 Tag 发布必须在 GitHub Secrets 配置 `WINDOWS_SIGNING_CERT_BASE64` 与 `WINDOWS_SIGNING_CERT_PASSWORD`，流水线会拒绝生成未签名的正式 Release。
+源码维护者先运行 `Prepare-Dependencies.ps1` 固定离线依赖，然后执行 `tests/Run-Tests.ps1`。如果配置了 `WINDOWS_SIGNING_CERT_BASE64` 与 `WINDOWS_SIGNING_CERT_PASSWORD`，流水线会对 EXE 进行 Authenticode 签名；未配置时仍可生成带构建证明的 Release。
 
 发布前确认包内没有 `list.xlsx`、`.DS_Store`、`~$*.xlsx`、备份、日志、测试结果或临时文件。
 

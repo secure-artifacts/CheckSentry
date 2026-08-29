@@ -1,4 +1,4 @@
-name: Build, test and sign CheckSentry
+name: Build, test and release CheckSentry
 
 on:
   workflow_dispatch:
@@ -6,9 +6,7 @@ on:
     tags: ['v*.*.*']
 
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
+  contents: read
 
 jobs:
   build:
@@ -48,6 +46,10 @@ jobs:
     if: github.ref_type == 'tag'
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -56,7 +58,7 @@ jobs:
       - uses: actions/attest-build-provenance@v2
         with:
           subject-path: 'release/*.zip'
-      - name: Publish signed release
+      - name: Publish release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

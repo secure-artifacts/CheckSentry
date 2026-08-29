@@ -1363,7 +1363,7 @@ function Test-CloudRulesApplied {
     foreach ($sheetName in $script:AllowedSheets) {
         foreach ($rule in @($LocalRules.$sheetName)) {
             $itemType = if ([string]::IsNullOrWhiteSpace([string]$rule.'类型')) { '软件' } else { [string]$rule.'类型' }
-            $identity = Get-RuleIdentity -ItemType $itemType -ExtensionId ([string]$rule.'插件ID') -NamePattern ([string]$rule.'软件名关键词')
+            $identity = Get-RuleIdentity -ItemType $itemType -ExtensionId ([string]$rule.'插件ID') -NamePattern ([string]$rule.'软件名关键词') -Publisher ([string]$rule.'发布者') -Version ([string]$rule.'版本号')
             $key = $sheetName + '|' + $identity
             if ($localByKey.ContainsKey($key)) { $localByKey[$key] = $null }
             else { $localByKey[$key] = $rule }
@@ -1419,11 +1419,12 @@ function Sync-CloudWorkbook {
         }
         $cloudRules = $candidate.Rules
         $localRules = Import-AllRuleSheets -Path $Path
+        $previousMetadata = Read-CloudSyncMetadata
         $cloudEntries = @()
         $identitySet = @{}
         foreach ($sheetName in $script:AllowedSheets) {
             foreach ($rule in @($cloudRules.$sheetName)) {
-                $identity = Get-RuleIdentity -ItemType $rule.'类型' -ExtensionId ([string]$rule.'插件ID') -NamePattern ([string]$rule.'软件名关键词')
+                $identity = Get-RuleIdentity -ItemType $rule.'类型' -ExtensionId ([string]$rule.'插件ID') -NamePattern ([string]$rule.'软件名关键词') -Publisher ([string]$rule.'发布者') -Version ([string]$rule.'版本号')
                 if ($identitySet.ContainsKey($identity)) { throw "云端模板存在重复对象或跨表冲突：$identity" }
                 $identitySet[$identity] = $true
                 $effectiveRule = [PSCustomObject]([ordered]@{
@@ -1442,11 +1443,27 @@ function Sync-CloudWorkbook {
                 $cloudEntries += [PSCustomObject]@{ Sheet = $sheetName; Rule = $effectiveRule; Identity = $identity }
             }
         }
+        $removalIdentitySet = @{}
+        foreach ($identity in @($identitySet.Keys)) { $removalIdentitySet[[string]$identity] = $true }
+        if ($null -ne $previousMetadata -and
+            [string]$previousMetadata.url -eq $effectiveUrl.Trim() -and
+            $null -ne $previousMetadata.cloudIdentities) {
+            foreach ($identity in @($previousMetadata.cloudIdentities)) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$identity)) {
+                    $removalIdentitySet[[string]$identity] = $true
+                }
+            }
+        }
+        $hasRetiredCloudIdentity = $false
+        foreach ($identity in @($removalIdentitySet.Keys)) {
+            if (-not $identitySet.ContainsKey([string]$identity)) { $hasRetiredCloudIdentity = $true; break }
+        }
         $changed = -not (Test-CloudRulesApplied -CloudEntries $cloudEntries -LocalRules $localRules)
+        if (-not $changed -and $hasRetiredCloudIdentity) { $changed = $true }
         if ($changed) {
             $operation = {
                 param($package)
-                Remove-IdentitiesFromPackage -Package $package -IdentitySet $identitySet
+                Remove-IdentitiesFromPackage -Package $package -IdentitySet $removalIdentitySet
                 $states = @{}
                 foreach ($entry in $cloudEntries) {
                     if (-not $states.ContainsKey($entry.Sheet)) { $states[$entry.Sheet] = Get-WorksheetAppendState -Package $package -SheetName $entry.Sheet }
@@ -1466,10 +1483,11 @@ function Sync-CloudWorkbook {
         if (-not $usingCache) {
             Save-CloudSnapshot -SourcePath $candidate.Path
             Write-CloudSyncMetadata -Metadata ([ordered]@{
-                version = 1
+                version = 2
                 url = $effectiveUrl.Trim()
                 syncedAt = $syncedAt
                 ruleHash = $candidate.RuleHash
+                cloudIdentities = @($identitySet.Keys | Sort-Object)
                 whiteCount = $candidate.Stats.WhiteCount
                 pendingCount = $candidate.Stats.PendingCount
                 blackCount = $candidate.Stats.BlackCount
@@ -1622,8 +1640,29 @@ function Convert-InputToRule {
 
 
 function Get-RuleIdentity {
-    param([string]$ItemType, [string]$ExtensionId, [string]$NamePattern)
-    if ($ItemType -eq '软件') { return ('软件|' + (ConvertTo-MatchComparableText $NamePattern).ToLowerInvariant()) }
+    param(
+        [string]$ItemType,
+        [string]$ExtensionId,
+        [string]$NamePattern,
+        [string]$Publisher = '',
+        [string]$Version = ''
+    )
+    if ($ItemType -eq '软件') {
+        $identityRule = [PSCustomObject]@{
+            类型 = '软件'
+            匹配方式 = '精确'
+            软件名关键词 = $NamePattern
+            版本号 = $Version
+        }
+        $effective = Get-EffectiveRuleMatchFields -Rule $identityRule
+        $nameKey = (ConvertTo-MatchComparableText $effective.NamePattern).ToLowerInvariant()
+        $publisherKey = (ConvertTo-MatchComparableText $Publisher).ToLowerInvariant()
+        $versionParts = @((Get-RuleVersionPatterns -RuleVersion ([string]$effective.Version)) | ForEach-Object {
+            (ConvertTo-MatchComparableText $_).ToLowerInvariant()
+        } | Sort-Object -Unique)
+        $versionKey = $versionParts -join ','
+        return (ConvertTo-Json -InputObject @('软件', $nameKey, $publisherKey, $versionKey) -Compress)
+    }
     return ($ItemType + '|' + ([string]$ExtensionId).Trim().ToLowerInvariant())
 }
 
@@ -1633,7 +1672,7 @@ function Get-WorksheetRowIdentity {
     $map = @{}
     for ($column = 1; $column -le $headers.Count; $column++) { $map[$headers[$column - 1]] = [string]($Worksheet.Cells[$Row, $column].Value) }
     $itemType = if ([string]::IsNullOrWhiteSpace($map['类型'])) { '软件' } else { $map['类型'] }
-    return Get-RuleIdentity -ItemType $itemType -ExtensionId $map['插件ID'] -NamePattern $map['软件名关键词']
+    return Get-RuleIdentity -ItemType $itemType -ExtensionId $map['插件ID'] -NamePattern $map['软件名关键词'] -Publisher $map['发布者'] -Version $map['版本号']
 }
 
 function Remove-IdentitiesFromPackage {
@@ -1935,7 +1974,7 @@ function New-ComplianceItem {
     $script:ReportIconData[$iconIdentity] = [PSCustomObject]@{ ItemType = $ItemType; Name = $displayName; Publisher = if ($isSoftware) { [string]$Source.发布者 } else { [string]$Source.Publisher }; ExtensionId = $extensionId; IconKey = $lazyIconKey }
     if ($null -ne $MatchedRule) {
         $ruleType = if ([string]::IsNullOrWhiteSpace([string]$MatchedRule.'类型')) { $ItemType } else { [string]$MatchedRule.'类型' }
-        $ruleIdentity = Get-RuleIdentity -ItemType $ruleType -ExtensionId ([string]$MatchedRule.'插件ID') -NamePattern ([string]$MatchedRule.'软件名关键词')
+        $ruleIdentity = Get-RuleIdentity -ItemType $ruleType -ExtensionId ([string]$MatchedRule.'插件ID') -NamePattern ([string]$MatchedRule.'软件名关键词') -Publisher ([string]$MatchedRule.'发布者') -Version ([string]$MatchedRule.'版本号')
         $script:RuleIconCache[$ruleIdentity] = [PSCustomObject]@{ Path = $iconPath; Index = $iconIndex; DataUri = ''; IconKey = $lazyIconKey }
         if (-not [string]::IsNullOrWhiteSpace([string]$MatchedRule.id)) {
             $script:RuleIconDataById[[string]$MatchedRule.id] = $lazyIconKey
@@ -2039,7 +2078,7 @@ function Add-NewPendingRules {
         $pendingState = Get-WorksheetAppendState -Package $package -SheetName '待定'
         foreach ($item in $candidates) {
             $itemType = [string]$item.类型
-            $identity = Get-RuleIdentity -ItemType $itemType -ExtensionId ([string]$item.插件ID) -NamePattern ([string]$item.名称)
+            $identity = Get-RuleIdentity -ItemType $itemType -ExtensionId ([string]$item.插件ID) -NamePattern ([string]$item.名称) -Publisher ([string]$item.发布者) -Version ([string]$item.版本)
             if ($existingIdentities.ContainsKey($identity)) {
                 $existingRule = $existingIdentities[$identity]
                 $item.MatchedSheet = $existingRule.Sheet
@@ -2052,7 +2091,7 @@ function Add-NewPendingRules {
                 extId = [string]$item.插件ID
                 matchType = if ($itemType -eq '软件') { '精确' } else { '插件ID精确' }
                 namePattern = [string]$item.名称
-                version = ''
+                version = [string]$item.版本
                                 publisher = [string]$item.发布者
                 note = ''
 
@@ -2671,7 +2710,7 @@ function Get-TargetSheetFromStatus {
 function Write-RuleChange {
     param([string]$Path, $Data, [string]$TargetSheet, [switch]$ExplicitClassification)
     $rule = Convert-InputToRule -Data $Data -TargetSheet $TargetSheet
-    $identity = Get-RuleIdentity -ItemType $rule.类型 -ExtensionId $rule.插件ID -NamePattern $rule.软件名关键词
+    $identity = Get-RuleIdentity -ItemType $rule.类型 -ExtensionId $rule.插件ID -NamePattern $rule.软件名关键词 -Publisher $rule.发布者 -Version $rule.版本号
     $originalSheet = [string]$Data.originalSheet
     $originalId = [string]$Data.id
     $hasMetadataInput = ($Data.metadataEdit -eq $true)
@@ -2739,7 +2778,7 @@ function Show-RuleConflictWarnings {
     foreach ($sheetName in $script:AllowedSheets) {
         foreach ($rule in @($allRules.$sheetName)) {
             $itemType = if ([string]::IsNullOrWhiteSpace([string]$rule.'类型')) { '软件' } else { [string]$rule.'类型' }
-            $entries += [PSCustomObject]@{ Identity = Get-RuleIdentity -ItemType $itemType -ExtensionId ([string]$rule.'插件ID') -NamePattern ([string]$rule.'软件名关键词'); Sheet = $sheetName }
+            $entries += [PSCustomObject]@{ Identity = Get-RuleIdentity -ItemType $itemType -ExtensionId ([string]$rule.'插件ID') -NamePattern ([string]$rule.'软件名关键词') -Publisher ([string]$rule.'发布者') -Version ([string]$rule.'版本号'); Sheet = $sheetName }
         }
     }
     foreach ($group in @($entries | Group-Object Identity | Where-Object { $_.Count -gt 1 })) {
@@ -2897,7 +2936,7 @@ function Start-ReportServer {
                             $identitySet = @{}
                             foreach ($ruleId in $ruleIds) {
                                 $rule = Get-RuleByIdFromPackage -Package $package -SheetName $sourceSheet -RuleId $ruleId
-                                $identity = Get-RuleIdentity -ItemType $rule.类型 -ExtensionId $rule.插件ID -NamePattern $rule.软件名关键词
+                                $identity = Get-RuleIdentity -ItemType $rule.类型 -ExtensionId $rule.插件ID -NamePattern $rule.软件名关键词 -Publisher $rule.发布者 -Version $rule.版本号
                                 if ($identitySet.ContainsKey($identity)) { throw "批量请求包含重复对象：$identity" }
                                 $identitySet[$identity] = $true
                                 $moveEntries += [PSCustomObject]@{ Rule = $rule; Identity = $identity }
@@ -2941,7 +2980,7 @@ function Start-ReportServer {
                             $target = Get-TargetSheetFromStatus -Status $item.status
                                                         $item | Add-Member -NotePropertyName type -NotePropertyValue $item.itemType -Force
                             $rule = Convert-InputToRule -Data $item -TargetSheet $target
-                            $identity = Get-RuleIdentity -ItemType $rule.类型 -ExtensionId $rule.插件ID -NamePattern $rule.软件名关键词
+                            $identity = Get-RuleIdentity -ItemType $rule.类型 -ExtensionId $rule.插件ID -NamePattern $rule.软件名关键词 -Publisher $rule.发布者 -Version $rule.版本号
                             if ($seenIdentities.ContainsKey($identity)) { throw "批量请求中存在重复对象：$identity" }
                             $seenIdentities[$identity] = $true
                             $hasMetadataInput = ($item.metadataEdit -eq $true)

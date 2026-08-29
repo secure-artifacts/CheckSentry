@@ -4,6 +4,9 @@ CheckSentry.cloud.json
 list.xlsx
 CloudCache/
 
+# Local Google Sheets maintenance script (not published to GitHub)
+GoogleAppsScript.gs
+
 # macOS / Windows local metadata
 .DS_Store
 Thumbs.db

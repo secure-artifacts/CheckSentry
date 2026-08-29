@@ -114,6 +114,17 @@
   .btn-cancel:hover { background: #e0e0e0; }
   .btn-save { background: #2c5282; color: #fff; }
   .btn-save:hover { background: #1a365d; }
+  .modal-btns button:disabled { opacity: 0.65; cursor: wait; }
+  .cloud-sync-progress {
+    display: none; align-items: center; gap: 9px; margin: 12px 0 0; padding: 10px 12px;
+    border-radius: 6px; background: #ebf4ff; color: #2c5282; font-size: 13px; font-weight: 600;
+  }
+  .cloud-sync-progress.visible { display: flex; }
+  .cloud-sync-spinner {
+    width: 16px; height: 16px; flex: 0 0 16px; border: 2px solid #bee3f8;
+    border-top-color: #2b6cb0; border-radius: 50%; animation: cloud-spin .75s linear infinite;
+  }
+  @keyframes cloud-spin { to { transform: rotate(360deg); } }
 
   details summary {
     cursor: pointer; color: #2c5282; font-size: 13px; user-select: none;
@@ -212,9 +223,13 @@
         <input type="url" id="cloudUrl" maxlength="2048" placeholder="https://docs.google.com/spreadsheets/d/..." autocomplete="off" required>
       </div>
       <p class="modal-help">要求表格包含“白名单”“待定”“黑名单”三个工作表。同步只读取这三个工作表的 B:K 十列，忽略 A 列 ID、其他列和其他工作表；B:K 表头对应现有规则字段。云端仅作为规则来源，云端没有的本地私有规则会保留。</p>
+      <div id="cloudSyncProgress" class="cloud-sync-progress" role="status" aria-live="polite">
+        <span class="cloud-sync-spinner" aria-hidden="true"></span>
+        <span id="cloudSyncProgressText">正在下载并验证云端清单，请稍候…</span>
+      </div>
       <div class="modal-btns">
         <button type="button" class="btn-cancel" id="cancelCloudButton">取消</button>
-        <button type="submit" class="btn-save">保存并同步</button>
+        <button type="submit" class="btn-save" id="cloudSaveButton">保存并同步</button>
       </div>
     </form>
   </div>
@@ -533,22 +548,42 @@ function closeCloudModal() {
   document.getElementById('cloudOverlay').style.display = 'none';
 }
 
+function setCloudSaveBusy(isBusy, message) {
+  const form = document.getElementById('cloudForm');
+  const button = document.getElementById('cloudSaveButton');
+  const cancelButton = document.getElementById('cancelCloudButton');
+  const input = document.getElementById('cloudUrl');
+  const progress = document.getElementById('cloudSyncProgress');
+  const progressText = document.getElementById('cloudSyncProgressText');
+  if (form) form.setAttribute('aria-busy', isBusy ? 'true' : 'false');
+  if (button) {
+    button.disabled = isBusy;
+    button.textContent = isBusy ? '正在同步…' : '保存并同步';
+  }
+  if (cancelButton) cancelButton.disabled = isBusy;
+  if (input) input.disabled = isBusy;
+  if (progressText && message) progressText.textContent = message;
+  if (progress) progress.classList.toggle('visible', isBusy);
+}
+
 async function saveCloudSettings(evt) {
   evt.preventDefault();
-  const button = evt.submitter;
-  if (button) button.disabled = true;
+  let navigating = false;
+  setCloudSaveBusy(true, '正在下载、校验并写入云端规则，通常需要 3–4 秒…');
+  showToast('正在保存并同步云端清单，请稍候…', false, true);
   try {
     const url = document.getElementById('cloudUrl').value.trim();
     const res = await apiPost('/api/manage/cloudSettings', { url: url });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || '云端链接保存失败');
-    closeCloudModal();
+    navigating = true;
+    setCloudSaveBusy(true, `同步完成：白 ${data.whiteCount}｜待 ${data.pendingCount}｜黑 ${data.blackCount}，正在刷新页面…`);
     showToast(`云端清单已验证：白 ${data.whiteCount}｜待 ${data.pendingCount}｜黑 ${data.blackCount}，正在刷新...`, false);
     setTimeout(() => { window.location.href = '/'; }, 700);
   } catch (e) {
     showToast('云端设置失败: ' + e.message, true);
   } finally {
-    if (button) button.disabled = false;
+    if (!navigating) setCloudSaveBusy(false);
   }
 }
 
