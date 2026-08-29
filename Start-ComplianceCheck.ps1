@@ -2110,6 +2110,14 @@ function Get-RowHtml {
     $noteLink = if ($null -ne $matchedRule) { ConvertTo-HtmlEncodedText $matchedRule.'备注/原因链接' } else { '' }
     $addedBy = if ($null -ne $matchedRule) { ConvertTo-HtmlEncodedText $matchedRule.'添加人' } else { '' }
     $addedTime = if ($null -ne $matchedRule) { ConvertTo-HtmlEncodedText $matchedRule.'添加时间' } else { '' }
+    $statusDisplay = $status
+    if ([string]$Item.状态 -eq '版本变化' -and $null -ne $matchedRule) {
+        $effectiveMatchedRule = Get-EffectiveRuleMatchFields -Rule $matchedRule
+        $ruleVersion = ConvertTo-HtmlEncodedText $effectiveMatchedRule.Version
+        if (-not [string]::IsNullOrWhiteSpace($ruleVersion)) {
+            $statusDisplay = "<div class='tooltip-wrapper'><div class='status-compact'>规则 $ruleVersion</div><div class='copyable-tooltip status-tooltip'>状态：版本变化<br>规则版本：$ruleVersion<br>当前版本：$version</div></div>"
+        }
+    }
 
     $typeIcon = if ($Item.类型 -eq '软件') { '&#128187;' } elseif ($Item.类型 -eq 'Chromium插件') { '&#127760;' } else { '&#129418;' }
     $iconKey = ConvertTo-HtmlEncodedText $Item.图标键
@@ -2170,7 +2178,7 @@ function Get-RowHtml {
     $reasonHtml = ConvertTo-SafeNoteHtml -Text $reason -Link $Item.'备注/原因链接'
     $reasonWrapper = if ([string]::IsNullOrWhiteSpace($reason)) { "<div class='tooltip-wrapper'><div class='truncate-hover'>-</div><div class='copyable-tooltip reason-tooltip'>-</div></div>" } else { "<div class='tooltip-wrapper'><div class='truncate-hover'>$reasonHtml</div><div class='copyable-tooltip reason-tooltip'>$reasonHtml</div></div>" }
     return @"
-    <tr class="$rowClass"><td class="chk-cell">$checkbox</td><td class="item-cell"><div class="item-cell-wrapper">$iconHtml<div class="item-main"><div class="item-title"><div class="tooltip-wrapper"><div class="item-name">$name</div><div class="copyable-tooltip">$name</div></div></div>$locationHtml</div></div></td><td>$version</td><td>$publisher</td><td>$status</td><td class="reason">$reasonWrapper</td><td>$actionHtml</td></tr>
+    <tr class="$rowClass"><td class="chk-cell">$checkbox</td><td class="item-cell"><div class="item-cell-wrapper">$iconHtml<div class="item-main"><div class="item-title"><div class="tooltip-wrapper"><div class="item-name">$name</div><div class="copyable-tooltip">$name</div></div></div>$locationHtml</div></div></td><td>$version</td><td>$publisher</td><td>$statusDisplay</td><td class="reason">$reasonWrapper</td><td>$actionHtml</td></tr>
 "@
 }
 
