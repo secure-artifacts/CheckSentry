@@ -1956,6 +1956,22 @@ function Find-FirstMatchingRule {
     return $null
 }
 
+function Find-BlacklistedPluginNameCollision {
+    param($Rules, [string]$ItemType, [string]$DisplayName, [string]$ExtensionId)
+    if ($ItemType -eq '软件' -or [string]::IsNullOrWhiteSpace($DisplayName)) { return $null }
+    $installedName = ConvertTo-MatchComparableText $DisplayName
+    foreach ($rule in @($Rules)) {
+        $ruleType = if ([string]::IsNullOrWhiteSpace([string]$rule.'类型')) { '软件' } else { [string]$rule.'类型' }
+        if ($ruleType -ne $ItemType -or [string]$rule.'匹配方式' -ne '插件ID精确') { continue }
+        $ruleExtensionId = ([string]$rule.'插件ID').Trim()
+        if ([string]::Equals($ruleExtensionId, ([string]$ExtensionId).Trim(), [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+        $ruleName = ConvertTo-MatchComparableText ([string]$rule.'软件名关键词')
+        if ([string]::IsNullOrWhiteSpace($ruleName)) { continue }
+        if ([string]::Equals($ruleName, $installedName, [System.StringComparison]::OrdinalIgnoreCase)) { return $rule }
+    }
+    return $null
+}
+
 function New-ComplianceItem {
     param($Source, [string]$ItemType, [string]$Status, [string]$Reason, $MatchedRule, [string]$MatchedSheet)
     $isSoftware = $ItemType -eq '软件'
@@ -2014,7 +2030,12 @@ function Get-ComplianceResult {
         $version = if ($ItemType -eq '软件') { [string]$item.版本 } elseif ($null -ne $item.Versions) { @($item.Versions) } else { [string]$item.Version }
         $extensionId = if ($ItemType -eq '软件') { '' } else { [string]$item.ExtensionId }
 
-        $black = Find-FirstMatchingRule -Rules $blackMatcher -ItemType $ItemType -DisplayName $displayName -Publisher $publisher -ExtensionId $extensionId -Version $version
+        # 黑名单不因版本升级自动失效；软件仍遵守发布者限制，插件只依赖其规则匹配方式（ID 规则必须精确匹配 ID）。
+        $black = if ($ItemType -eq '软件') {
+            Find-FirstMatchingRule -Rules $blackMatcher -ItemType $ItemType -DisplayName $displayName -Publisher $publisher -ExtensionId $extensionId -Version $version -IgnoreVersion
+        } else {
+            Find-FirstMatchingRule -Rules $blackMatcher -ItemType $ItemType -DisplayName $displayName -Publisher $publisher -ExtensionId $extensionId -Version $version -IgnoreVersion -IgnorePublisher
+        }
         if ($null -ne $black) {
             $reason = Get-UserNoteText $black.'备注/原因'
             $results += New-ComplianceItem -Source $item -ItemType $ItemType -Status '命中黑名单' -Reason $reason -MatchedRule $black -MatchedSheet '黑名单'
@@ -2051,6 +2072,16 @@ function Get-ComplianceResult {
             $reason = "白名单名称一致，但版本和发布者均不同。规则版本：$($effectiveMultipleRule.Version)；扫描版本：$version；规则发布者：$($whiteMultipleMismatch.'发布者')；扫描发布者：$actualPublisher"
             $results += New-ComplianceItem -Source $item -ItemType $ItemType -Status '待定' -Reason $reason -MatchedRule $whiteMultipleMismatch -MatchedSheet '白名单'
             continue
+        }
+
+        if ($ItemType -ne '软件') {
+            $blackNameCollision = Find-BlacklistedPluginNameCollision -Rules $BlackRules -ItemType $ItemType -DisplayName $displayName -ExtensionId $extensionId
+            if ($null -ne $blackNameCollision) {
+                $blackId = [string]$blackNameCollision.'插件ID'
+                $reason = "名称与黑名单插件相同，但插件 ID 不同，请人工确认。黑名单 ID：$blackId；当前 ID：$extensionId"
+                $results += New-ComplianceItem -Source $item -ItemType $ItemType -Status '待定' -Reason $reason -MatchedRule $null -MatchedSheet ''
+                continue
+            }
         }
 
         $pending = Find-FirstMatchingRule -Rules $pendingMatcher -ItemType $ItemType -DisplayName $displayName -Publisher $publisher -ExtensionId $extensionId -Version $version

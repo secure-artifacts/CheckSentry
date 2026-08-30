@@ -59,6 +59,26 @@ $publisherResult = @(Get-ComplianceResult -Installed @([PSCustomObject]@{ 名称
 Assert-True ($publisherResult.Count -eq 1 -and $publisherResult[0].状态 -eq '待定' -and $publisherResult[0].原因 -match '发布者不同') '白名单近似匹配必须在待定区明确显示发布者差异。'
 $emptyRuleResult = @(Get-ComplianceResult -Installed @([PSCustomObject]@{ 名称='Unknown Tool'; 版本='1.0'; 发布者=''; 安装日期=''; 安装路径=''; 图标路径=''; 图标索引=0 }) -BlackRules @() -WhiteRules @() -PendingRules @() -ItemType '软件')
 Assert-True ($emptyRuleResult.Count -eq 1 -and $emptyRuleResult[0].状态 -eq '待定' -and $null -eq $emptyRuleResult[0].MatchedRule) '未配置任何规则时，扫描结果必须正常进入待定。'
+
+$blackSoftwareRule = [PSCustomObject]@{ 类型='软件'; 匹配方式='精确'; 软件名关键词='abc 1.2.3'; 插件ID=''; 版本号='1.2.3'; 发布者='' }
+$blackSoftwareResult = @(Get-ComplianceResult -Installed @([PSCustomObject]@{ 名称='abc 1.2.2'; 版本='1.2.2'; 发布者=''; 安装日期=''; 安装路径=''; 图标路径=''; 图标索引=0 }) -BlackRules @($blackSoftwareRule) -WhiteRules @() -PendingRules @() -ItemType '软件')
+Assert-True ($blackSoftwareResult.Count -eq 1 -and $blackSoftwareResult[0].状态 -eq '命中黑名单') '黑名单软件名称匹配后必须忽略版本差异。'
+$publisherScopedBlackRule = [PSCustomObject]@{ 类型='软件'; 匹配方式='精确'; 软件名关键词='VeraCrypt'; 插件ID=''; 版本号='1.25.9'; 发布者='IDRIX' }
+$publisherScopedBlackResult = @(Get-ComplianceResult -Installed @([PSCustomObject]@{ 名称='VeraCrypt'; 版本='1.26.24'; 发布者='AM Crypto'; 安装日期=''; 安装路径=''; 图标路径=''; 图标索引=0 }) -BlackRules @($publisherScopedBlackRule) -WhiteRules @() -PendingRules @() -ItemType '软件')
+Assert-True ($publisherScopedBlackResult.Count -eq 1 -and $publisherScopedBlackResult[0].状态 -eq '待定') '黑名单软件填写发布者后不得误杀同名的其他发布者。'
+
+$clickCleanWhiteRule = [PSCustomObject]@{ 类型='Chromium插件'; 匹配方式='插件ID精确'; 软件名关键词='Click&Clean'; 插件ID='ghgabhipcejejjmhhchfonmamedcbeod'; 版本号='9.8.2.0'; 发布者='' }
+$clickCleanBlackRule = [PSCustomObject]@{ 类型='Chromium插件'; 匹配方式='插件ID精确'; 软件名关键词='Click&Clean'; 插件ID='dacknjoogbepndbemlmljdobinliojbk'; 版本号='9.8.2.0'; 发布者='旧发布者文本' }
+function New-TestExtension([string]$ExtensionId, [string]$Version = '9.8.2.0') {
+    return [PSCustomObject]@{ Name='Click&Clean'; ExtensionId=$ExtensionId; Version=$Version; Versions=@($Version); Publisher=''; Locations=@(); IconPath=''; Enabled=$true }
+}
+$whiteClickCleanResult = @(Get-ComplianceResult -Installed @(New-TestExtension 'ghgabhipcejejjmhhchfonmamedcbeod') -BlackRules @($clickCleanBlackRule) -WhiteRules @($clickCleanWhiteRule) -PendingRules @() -ItemType 'Chromium插件')
+Assert-True ($whiteClickCleanResult.Count -eq 1 -and $whiteClickCleanResult[0].状态 -eq '已匹配') '同名插件必须按准确 ID 命中白名单，不能被另一个黑名单 ID 误杀。'
+$blackClickCleanResult = @(Get-ComplianceResult -Installed @(New-TestExtension 'dacknjoogbepndbemlmljdobinliojbk' '10.0.0') -BlackRules @($clickCleanBlackRule) -WhiteRules @($clickCleanWhiteRule) -PendingRules @() -ItemType 'Chromium插件')
+Assert-True ($blackClickCleanResult.Count -eq 1 -and $blackClickCleanResult[0].状态 -eq '命中黑名单') '黑名单插件 ID 匹配后必须忽略版本和发布者差异。'
+$unknownClickCleanResult = @(Get-ComplianceResult -Installed @(New-TestExtension 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa') -BlackRules @($clickCleanBlackRule) -WhiteRules @($clickCleanWhiteRule) -PendingRules @() -ItemType 'Chromium插件')
+Assert-True ($unknownClickCleanResult.Count -eq 1 -and $unknownClickCleanResult[0].状态 -eq '待定' -and $unknownClickCleanResult[0].原因 -match '名称与黑名单插件相同.*插件 ID 不同') '同名但陌生 ID 的插件必须进入待定并给出风险原因。'
+
 Assert-XlsxArchiveComplete -Path (Join-Path $root 'list_template.xlsx')
 $cloudStats = Get-CloudRuleStats -AllRules ([PSCustomObject]@{ '白名单'=@(1,2); '待定'=@(3); '黑名单'=@(4,5,6) })
 Assert-True ($cloudStats.TotalCount -eq 6 -and $cloudStats.WhiteCount -eq 2 -and $cloudStats.PendingCount -eq 1 -and $cloudStats.BlackCount -eq 3) '云端规则分表数量统计必须准确。'
