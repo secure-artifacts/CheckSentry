@@ -17,3 +17,13 @@ if (!/id="cloudSyncProgress"[\s\S]*cloud-sync-spinner/.test(reportHtml)) {
 if (!/setCloudSaveBusy\(true,[\s\S]*apiPost\('\/api\/manage\/cloudSettings'/.test(reportHtml)) {
   throw new Error('report_template.html: cloud save must enter busy state before request');
 }
+if (/lazy-checksentry-icon hidden/.test(reportHtml)) {
+  throw new Error('report_template.html: lazy icon cannot use display:none before IntersectionObserver');
+}
+if (!/item-icon-slot[\s\S]*icon-ready/.test(reportHtml)) {
+  throw new Error('report_template.html: visible lazy icon slot missing');
+}
+const managementHtml = fs.readFileSync(path.join(root, 'management_template.html'), 'utf8');
+if (/data-icon-key="\$\{escapeHtml\(iconKey\)\}"[^>]*display:none/.test(managementHtml)) {
+  throw new Error('management_template.html: lazy rule icon cannot use display:none');
+}

@@ -9,6 +9,30 @@ permissions:
   contents: read
 
 jobs:
+  codeql:
+    name: CodeQL security scan
+    runs-on: windows-latest
+    permissions:
+      security-events: write
+      packages: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: csharp
+          build-mode: manual
+          queries: security-and-quality
+      - name: Build launcher for CodeQL
+        shell: pwsh
+        run: dotnet build .\launcher\CheckSentry.Launcher.csproj --configuration Release
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: '/language:csharp'
+
   build:
     runs-on: windows-latest
     strategy:
@@ -44,7 +68,7 @@ jobs:
 
   release:
     if: github.ref_type == 'tag'
-    needs: build
+    needs: [build, codeql]
     runs-on: ubuntu-latest
     permissions:
       contents: write

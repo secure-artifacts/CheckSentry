@@ -99,6 +99,8 @@
   th, td { padding: 4px 12px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: middle; height: 32px; white-space: nowrap; }
   th { background: #f4f4f4; font-weight: 600; }
   .rule-icon-cell { width: 54px; text-align: center; }
+  .rule-icon-slot { position: relative; display: inline-block; width: 24px; height: 24px; vertical-align: middle; }
+  .rule-icon-slot .rule-icon, .rule-icon-slot .rule-icon-fallback { position: absolute; inset: 0; margin: 0; }
   .rule-icon { width: 24px; height: 24px; object-fit: contain; vertical-align: middle; border-radius: 4px; background: #fff; }
   .rule-icon-fallback { font-size: 16px; }
   
@@ -366,7 +368,7 @@ async function loadCheckSentryIcon(img) {
     const data = await response.json();
     if (!response.ok || !data.ok || !data.dataUri) return;
     img.addEventListener('load', () => {
-      img.style.display = '';
+      img.style.visibility = 'visible';
       const fallback = img.nextElementSibling;
       if (fallback) fallback.style.display = 'none';
     }, { once: true });
@@ -384,7 +386,7 @@ function observeRuleIcons(root) {
           loadCheckSentryIcon(img);
         });
       }, { rootMargin: '200px' });
-      observer.observe(img);
+      observer.observe(img.closest('.rule-icon-slot') || img);
     } else loadCheckSentryIcon(img);
   });
 }
@@ -809,9 +811,9 @@ function filterTable() {
     const safeAddedTime = escapeHtml(inlineDisplayValue(rule, '添加时间') || '-');
 
     const icon = iconData
-      ? `<img class="rule-icon" src="${safeIconData}" alt="" loading="lazy"><span class="rule-icon-fallback" style="display:none;">${fallbackIcon}</span>`
+      ? `<span class="rule-icon-slot"><img class="rule-icon" src="${safeIconData}" alt="" loading="lazy"><span class="rule-icon-fallback" style="display:none;">${fallbackIcon}</span></span>`
       : iconKey
-      ? `<img class="rule-icon" data-icon-key="${escapeHtml(iconKey)}" alt="" loading="lazy" style="display:none;"><span class="rule-icon-fallback">${fallbackIcon}</span>`
+      ? `<span class="rule-icon-slot"><img class="rule-icon" data-icon-key="${escapeHtml(iconKey)}" alt="" loading="lazy" style="visibility:hidden;"><span class="rule-icon-fallback">${fallbackIcon}</span></span>`
       : `<span class="rule-icon-fallback">${fallbackIcon}</span>`;
     
     const selectionKey = currentTab + '|' + String(rule.id || '');
@@ -851,7 +853,7 @@ function filterTable() {
     const iconElement = tr.querySelector('img.rule-icon');
     if (iconElement) {
       iconElement.addEventListener('error', () => {
-        iconElement.style.display = 'none';
+        iconElement.style.visibility = 'hidden';
         const fallback = iconElement.nextElementSibling;
       if (fallback) fallback.style.display = 'inline';
       });

@@ -21,6 +21,25 @@ Assert-True (Test-VersionMatch -InstalledVersion '6.45.2' -RuleVersion '[6.45.3,
 Assert-True (-not (Test-VersionMatch -InstalledVersion '6.45.9' -RuleVersion '[6.45.3, 6.45.2, 6.45.1]')) '版本列表中不存在的版本不应匹配。'
 Assert-True ((Get-SafeChildPath -BasePath $root -RelativePath '..\outside.txt') -eq '') '安全路径函数必须拒绝目录穿越。'
 
+$extensionFixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('CheckSentry-extension-fixture-' + [guid]::NewGuid().ToString('N'))
+try {
+    $extensionProfile = Join-Path $extensionFixtureRoot 'Default'
+    $extensionStore = Join-Path $extensionProfile 'Extensions'
+    $unpackedExtension = Join-Path $extensionFixtureRoot 'UnpackedExtension'
+    $zippedExtension = Join-Path $extensionProfile 'UnpackedExtensions\fixture_ABC123'
+    $null = New-Item -ItemType Directory -Path $extensionStore, $unpackedExtension, $zippedExtension -Force
+    [System.IO.File]::WriteAllText((Join-Path $unpackedExtension 'manifest.json'), '{"name":"Fixture","version":"1.0"}', (New-Object System.Text.UTF8Encoding($false)))
+    [System.IO.File]::WriteAllText((Join-Path $zippedExtension 'manifest.json'), '{"name":"Zip Fixture","version":"1.0"}', (New-Object System.Text.UTF8Encoding($false)))
+    $resolvedUnpackedPath = Resolve-ChromiumConfiguredExtensionPath -ProfilePath $extensionProfile -ExtensionsPath $extensionStore -ConfiguredPath $unpackedExtension
+    $resolvedZipPath = Resolve-ChromiumConfiguredExtensionPath -ProfilePath $extensionProfile -ExtensionsPath $extensionStore -ConfiguredPath 'UnpackedExtensions\fixture_ABC123'
+    Assert-True ($resolvedUnpackedPath -eq $unpackedExtension) '配置中登记的解压加载插件路径必须能够被识别。'
+    Assert-True ($resolvedZipPath -eq $zippedExtension) '开发者模式从 ZIP 安装到 UnpackedExtensions 的插件必须能够被识别。'
+    Assert-True (Test-IsChromiumComponentSetting -ExtensionSetting ([PSCustomObject]@{ location = 5 })) 'Chromium 内置组件扩展必须被识别为组件。'
+    Assert-True (-not (Test-IsChromiumComponentSetting -ExtensionSetting ([PSCustomObject]@{ location = 4 }))) '开发者模式加载的插件不得被误判为 Chromium 内置组件。'
+} finally {
+    if (Test-Path -LiteralPath $extensionFixtureRoot -PathType Container) { Remove-Item -LiteralPath $extensionFixtureRoot -Recurse -Force }
+}
+
 $videoKitDefaults = Get-DefaultRuleFields -Item ([PSCustomObject]@{ 类型='软件'; 名称='VideoKit 4.4.27'; 版本='4.4.27' })
 Assert-True ($videoKitDefaults.MatchType -eq '包含') '名称末尾包含版本的软件应默认使用包含匹配。'
 Assert-True ($videoKitDefaults.NamePattern -eq 'VideoKit') '软件规则关键词应自动移除名称末尾的版本号。'
@@ -138,6 +157,13 @@ Assert-True ($launcherSource -match 'RedirectStandardOutput\s*=\s*false' -and $l
 Assert-True ($launcherSource -match '"-LogPath",\s*logPath') '启动失败日志必须由 PowerShell 直接按 UTF-8 写入。'
 $mainScriptSource = Get-Content -LiteralPath (Join-Path $root 'Start-ComplianceCheck.ps1') -Raw -Encoding UTF8
 Assert-True ($mainScriptSource -match '\[Console\]::OutputEncoding\s*=\s*\$script:Utf8ConsoleEncoding' -and $mainScriptSource -match '\$global:OutputEncoding\s*=') 'PowerShell 主程序必须在输出中文前启用 UTF-8。'
+Assert-True ($mainScriptSource -match 'Get-ChromiumExtensions\s+-IncludeInactive:\$IncludeInactiveValue\s+-AllUsers:\$AllUsersValue') 'Chromium 插件扫描必须正确接收“扫描所有用户”选项。'
+Assert-True ($mainScriptSource -match 'Get-FirefoxExtensions\s+-IncludeInactive:\$IncludeInactiveValue\s+-AllUsers:\$AllUsersValue') 'Firefox 插件扫描必须正确接收“扫描所有用户”选项。'
+$extensionSource = Get-Content -LiteralPath (Join-Path $root 'Get-InstalledExtensions.ps1') -Raw -Encoding UTF8
+foreach ($supportedBrowserPath in @('Google\Chrome\User Data', 'Microsoft\Edge\User Data', 'Chromium\User Data', 'BraveSoftware\Brave-Browser\User Data', 'Vivaldi\User Data', 'Naver\Naver Whale\User Data')) {
+    Assert-True ($extensionSource -match [regex]::Escape($supportedBrowserPath)) "插件扫描缺少指定浏览器路径：$supportedBrowserPath"
+}
+Assert-True ($extensionSource -notmatch 'Opera Software|YandexBrowser|Chrome Beta|Edge Beta') '插件扫描不得扩展到用户未指定的其他浏览器。'
 Assert-True (Test-Path -LiteralPath (Join-Path $root 'Modules\ImportExcel\7.8.10\ImportExcel.psd1')) '发布前必须包含离线 ImportExcel 7.8.10。'
 
 $node = Get-Command node -ErrorAction SilentlyContinue

@@ -2240,12 +2240,12 @@ function Start-InventoryScanJobs {
         [PSCustomObject]@{ Kind = 'Chromium'; Script = {
             param($RootPath, $IncludeSystemValue, $IncludeInactiveValue, $AllUsersValue)
             . (Join-Path $RootPath 'Get-InstalledExtensions.ps1')
-            [PSCustomObject]@{ Kind = 'Chromium'; Items = @(Get-ChromiumExtensions -IncludeInactive:$IncludeInactiveValue) }
+            [PSCustomObject]@{ Kind = 'Chromium'; Items = @(Get-ChromiumExtensions -IncludeInactive:$IncludeInactiveValue -AllUsers:$AllUsersValue) }
         } },
         [PSCustomObject]@{ Kind = 'Firefox'; Script = {
             param($RootPath, $IncludeSystemValue, $IncludeInactiveValue, $AllUsersValue)
             . (Join-Path $RootPath 'Get-InstalledExtensions.ps1')
-            [PSCustomObject]@{ Kind = 'Firefox'; Items = @(Get-FirefoxExtensions -IncludeInactive:$IncludeInactiveValue) }
+            [PSCustomObject]@{ Kind = 'Firefox'; Items = @(Get-FirefoxExtensions -IncludeInactive:$IncludeInactiveValue -AllUsers:$AllUsersValue) }
         } }
     )
     foreach ($specification in $specifications) {
@@ -2548,7 +2548,7 @@ function Get-RowHtml {
     $typeIcon = if ($Item.类型 -eq '软件') { '&#128187;' } elseif ($Item.类型 -eq 'Chromium插件') { '&#127760;' } else { '&#129418;' }
     $iconKey = ConvertTo-HtmlEncodedText $Item.图标键
     $iconHtml = if (-not [string]::IsNullOrWhiteSpace([string]$Item.图标键)) {
-        "<img class='item-icon lazy-checksentry-icon hidden' data-icon-key='$iconKey' alt='' loading='lazy'><span class='type-fallback'>$typeIcon</span>"
+        "<span class='item-icon-slot'><img class='item-icon lazy-checksentry-icon' data-icon-key='$iconKey' alt='' loading='lazy'><span class='type-fallback'>$typeIcon</span></span>"
     } else { "<span class='type-fallback'>$typeIcon</span>" }
 
     $locationText = ''
@@ -2558,8 +2558,10 @@ function Get-RowHtml {
         $parts = @()
         foreach ($location in @($Item.Locations)) {
             $browser = if ($location.Browser) { [string]$location.Browser } elseif ($Item.类型 -eq 'Firefox插件') { 'Firefox' } else { '' }
+            $windowsUser = [string]$location.WindowsUser
             $locationProfile = [string]$location.ProfileName
-            if ($browser -and $locationProfile) { $parts += ($browser + ' / ' + $locationProfile) }
+            if ($windowsUser -and $browser -and $locationProfile) { $parts += ($windowsUser + ' / ' + $browser + ' / ' + $locationProfile) }
+            elseif ($browser -and $locationProfile) { $parts += ($browser + ' / ' + $locationProfile) }
             elseif ($browser) { $parts += $browser }
             elseif ($locationProfile) { $parts += $locationProfile }
         }

@@ -1,8 +1,73 @@
 ﻿<#
 .SYNOPSIS
-    采集 Chrome、Edge、Chromium、Brave、Vivaldi、Naver Whale 和 Firefox 插件。
+    采集主流 Chromium 浏览器和 Firefox 插件。
     对同一插件的多个浏览器/个人资料进行聚合，并容错处理损坏的 manifest。
 #>
+
+function Get-ExtensionUserProfiles {
+    param([switch]$AllUsers)
+
+    $profiles = @()
+    $currentProfile = [Environment]::GetFolderPath('UserProfile')
+    $currentLocal = [Environment]::GetFolderPath('LocalApplicationData')
+    $currentRoaming = [Environment]::GetFolderPath('ApplicationData')
+    if (-not [string]::IsNullOrWhiteSpace($currentProfile)) {
+        $profiles += [PSCustomObject]@{
+            UserName = Split-Path $currentProfile -Leaf
+            ProfilePath = $currentProfile
+            LocalAppData = $currentLocal
+            RoamingAppData = $currentRoaming
+        }
+    }
+
+    if ($AllUsers) {
+        $usersRoot = if (-not [string]::IsNullOrWhiteSpace($env:SystemDrive)) { Join-Path $env:SystemDrive 'Users' } else { '' }
+        if (-not [string]::IsNullOrWhiteSpace($usersRoot) -and (Test-Path -LiteralPath $usersRoot -PathType Container)) {
+            try {
+                foreach ($directory in @(Get-ChildItem -LiteralPath $usersRoot -Directory -Force -ErrorAction Stop)) {
+                    $localAppData = Join-Path $directory.FullName 'AppData\Local'
+                    $roamingAppData = Join-Path $directory.FullName 'AppData\Roaming'
+                    if (-not (Test-Path -LiteralPath $localAppData -PathType Container) -and -not (Test-Path -LiteralPath $roamingAppData -PathType Container)) { continue }
+                    if (@($profiles | Where-Object { $_.ProfilePath -eq $directory.FullName }).Count -gt 0) { continue }
+                    $profiles += [PSCustomObject]@{
+                        UserName = $directory.Name
+                        ProfilePath = $directory.FullName
+                        LocalAppData = $localAppData
+                        RoamingAppData = $roamingAppData
+                    }
+                }
+            } catch {
+                Write-Verbose "枚举 Windows 用户目录失败：$($_.Exception.Message)"
+            }
+        }
+    }
+    return @($profiles)
+}
+
+function Read-BrowserJsonDocument {
+    param([string]$Path, [int]$MaxAttempts = 3)
+    $lastError = $null
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        $stream = $null
+        $reader = $null
+        try {
+            $shareMode = [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
+            $stream = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, $shareMode)
+            $reader = New-Object System.IO.StreamReader($stream, (New-Object System.Text.UTF8Encoding($false)), $true)
+            $jsonText = $reader.ReadToEnd()
+            if ([string]::IsNullOrWhiteSpace($jsonText)) { throw 'JSON 文件内容为空。' }
+            return ($jsonText | ConvertFrom-Json -ErrorAction Stop)
+        } catch {
+            $lastError = $_
+            if ($attempt -lt $MaxAttempts) { Start-Sleep -Milliseconds (60 * $attempt) }
+        } finally {
+            if ($null -ne $reader) { $reader.Dispose() }
+            elseif ($null -ne $stream) { $stream.Dispose() }
+        }
+    }
+    if ($null -ne $lastError) { throw $lastError }
+    throw "无法读取 JSON 文件：$Path"
+}
 
 function Get-SafeChildPath {
     param([string]$BasePath, [string]$RelativePath)
@@ -142,7 +207,7 @@ function Resolve-ManifestMessage {
         $messagePath = Join-Path (Join-Path $localesPath $localeName) 'messages.json'
         if (-not (Test-Path -LiteralPath $messagePath -PathType Leaf)) { continue }
         try {
-            $messages = Get-Content -LiteralPath $messagePath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            $messages = Read-BrowserJsonDocument -Path $messagePath
             $messageProperty = $messages.PSObject.Properties[$MessageKey]
             if ($null -ne $messageProperty -and $null -ne $messageProperty.Value.message) {
                 $resolved = [string]$messageProperty.Value.message
@@ -175,7 +240,7 @@ function Get-ChromiumProfileExtensionSettings {
         $settingsPath = Join-Path $ProfilePath $fileName
         if (-not (Test-Path -LiteralPath $settingsPath -PathType Leaf)) { continue }
         try {
-            $document = Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            $document = Read-BrowserJsonDocument -Path $settingsPath
             $extensionSettings = $document.extensions.settings
             if ($null -eq $extensionSettings) { continue }
             foreach ($property in $extensionSettings.PSObject.Properties) {
@@ -188,36 +253,95 @@ function Get-ChromiumProfileExtensionSettings {
     return $settings
 }
 
+function Resolve-ChromiumConfiguredExtensionPath {
+    param([string]$ProfilePath, [string]$ExtensionsPath, [object]$ConfiguredPath)
+    $pathText = ([string]$ConfiguredPath).Trim().Trim('"')
+    if ([string]::IsNullOrWhiteSpace($pathText)) { return '' }
+
+    $candidates = @()
+    try {
+        $expandedPath = [Environment]::ExpandEnvironmentVariables($pathText)
+        if ([System.IO.Path]::IsPathRooted($expandedPath)) {
+            $candidates += [System.IO.Path]::GetFullPath($expandedPath)
+        } else {
+            $fromExtensions = Get-SafeChildPath -BasePath $ExtensionsPath -RelativePath $expandedPath
+            $fromProfile = Get-SafeChildPath -BasePath $ProfilePath -RelativePath $expandedPath
+            if (-not [string]::IsNullOrWhiteSpace($fromExtensions)) { $candidates += $fromExtensions }
+            if (-not [string]::IsNullOrWhiteSpace($fromProfile)) { $candidates += $fromProfile }
+        }
+    } catch {
+        return ''
+    }
+
+    foreach ($candidateValue in @($candidates | Select-Object -Unique)) {
+        $candidate = [string]$candidateValue
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            if ((Split-Path $candidate -Leaf) -ne 'manifest.json') { continue }
+            $candidate = Split-Path $candidate -Parent
+        }
+        if (-not (Test-Path -LiteralPath $candidate -PathType Container)) { continue }
+        if (Test-Path -LiteralPath (Join-Path $candidate 'manifest.json') -PathType Leaf) {
+            try { return (Get-Item -LiteralPath $candidate -ErrorAction Stop).FullName } catch { continue }
+        }
+    }
+    return ''
+}
+
+function Test-IsChromiumComponentSetting {
+    param($ExtensionSetting)
+    if ($null -eq $ExtensionSetting -or $null -eq $ExtensionSetting.location) { return $false }
+    $location = 0
+    if (-not [int]::TryParse([string]$ExtensionSetting.location, [ref]$location)) { return $false }
+    return $location -in @(5, 10)
+}
+
 function Get-ChromiumExtensions {
-    param([switch]$IncludeInactive)
-    $localAppData = [Environment]::GetFolderPath('LocalApplicationData')
-    $browsers = [ordered]@{
-        'Chrome'   = Join-Path $localAppData 'Google\Chrome\User Data'
-        'Edge'     = Join-Path $localAppData 'Microsoft\Edge\User Data'
-        'Chromium' = Join-Path $localAppData 'Chromium\User Data'
-        'Brave'    = Join-Path $localAppData 'BraveSoftware\Brave-Browser\User Data'
-        'Vivaldi'  = Join-Path $localAppData 'Vivaldi\User Data'
-        'Whale'    = Join-Path $localAppData 'Naver\Naver Whale\User Data'
+    param([switch]$IncludeInactive, [switch]$AllUsers)
+
+    $browserRoots = @()
+    foreach ($userProfile in @(Get-ExtensionUserProfiles -AllUsers:$AllUsers)) {
+        $localDefinitions = [ordered]@{
+            'Chrome'   = 'Google\Chrome\User Data'
+            'Edge'     = 'Microsoft\Edge\User Data'
+            'Chromium' = 'Chromium\User Data'
+            'Brave'    = 'BraveSoftware\Brave-Browser\User Data'
+            'Vivaldi'  = 'Vivaldi\User Data'
+            'Whale'    = 'Naver\Naver Whale\User Data'
+        }
+        foreach ($browserName in $localDefinitions.Keys) {
+            $browserRoots += [PSCustomObject]@{
+                BrowserName = $browserName
+                UserName = $userProfile.UserName
+                Path = Join-Path $userProfile.LocalAppData $localDefinitions[$browserName]
+            }
+        }
     }
 
     $allExtensions = @()
-    foreach ($browserName in $browsers.Keys) {
-        $userDataPath = $browsers[$browserName]
+    foreach ($browserRoot in $browserRoots) {
+        $browserName = $browserRoot.BrowserName
+        $userDataPath = $browserRoot.Path
         if (-not (Test-Path -LiteralPath $userDataPath -PathType Container)) { continue }
 
         $localState = $null
         $localStatePath = Join-Path $userDataPath 'Local State'
         if (Test-Path -LiteralPath $localStatePath -PathType Leaf) {
             try {
-                $localState = Get-Content -LiteralPath $localStatePath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                $localState = Read-BrowserJsonDocument -Path $localStatePath
             } catch {
                 Write-Verbose "解析 Chromium Local State 失败：$localStatePath。$($_.Exception.Message)"
             }
         }
 
         try {
-            $profiles = @(Get-ChildItem -LiteralPath $userDataPath -Directory -ErrorAction Stop | Where-Object {
-                Test-Path -LiteralPath (Join-Path $_.FullName 'Extensions') -PathType Container
+            $profiles = @()
+            if (Test-Path -LiteralPath (Join-Path $userDataPath 'Extensions') -PathType Container) {
+                $profiles += Get-Item -LiteralPath $userDataPath -ErrorAction Stop
+            }
+            $profiles += @(Get-ChildItem -LiteralPath $userDataPath -Directory -ErrorAction Stop | Where-Object {
+                (Test-Path -LiteralPath (Join-Path $_.FullName 'Extensions') -PathType Container) -or
+                (Test-Path -LiteralPath (Join-Path $_.FullName 'Preferences') -PathType Leaf) -or
+                (Test-Path -LiteralPath (Join-Path $_.FullName 'Secure Preferences') -PathType Leaf)
             })
         } catch {
             continue
@@ -226,14 +350,35 @@ function Get-ChromiumExtensions {
         foreach ($browserProfile in $profiles) {
             $extensionsPath = Join-Path $browserProfile.FullName 'Extensions'
             $configuredExtensions = Get-ChromiumProfileExtensionSettings -ProfilePath $browserProfile.FullName
-            try { $extensionDirectories = @(Get-ChildItem -LiteralPath $extensionsPath -Directory -ErrorAction Stop) } catch { continue }
-            foreach ($extensionDirectory in $extensionDirectories) {
-                $extensionId = $extensionDirectory.Name
+            try {
+                $extensionCandidates = @(Get-ChildItem -LiteralPath $extensionsPath -Directory -ErrorAction Stop | ForEach-Object {
+                    [PSCustomObject]@{ Name = $_.Name; FullName = $_.FullName; DirectVersionPath = '' }
+                })
+            } catch { $extensionCandidates = @() }
+
+            $standardPaths = @{}
+            foreach ($candidate in $extensionCandidates) { $standardPaths[$candidate.Name.ToLowerInvariant()] = $candidate.FullName }
+            foreach ($configuredEntry in $configuredExtensions.GetEnumerator()) {
+                $configuredId = ([string]$configuredEntry.Key).ToLowerInvariant()
+                if (Test-IsChromiumComponentSetting -ExtensionSetting $configuredEntry.Value) { continue }
+                $directPath = Resolve-ChromiumConfiguredExtensionPath -ProfilePath $browserProfile.FullName -ExtensionsPath $extensionsPath -ConfiguredPath $configuredEntry.Value.path
+                if ([string]::IsNullOrWhiteSpace($directPath)) { continue }
+                if ($standardPaths.ContainsKey($configuredId)) {
+                    $standardRoot = ([string]$standardPaths[$configuredId]).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+                    if ($directPath.StartsWith($standardRoot, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+                    $extensionCandidates = @($extensionCandidates | Where-Object { $_.Name -ne $configuredId })
+                }
+                $extensionCandidates += [PSCustomObject]@{ Name = $configuredId; FullName = $directPath; DirectVersionPath = $directPath }
+            }
+
+            foreach ($extensionCandidate in $extensionCandidates) {
+                $extensionId = $extensionCandidate.Name
                 if ($extensionId -notmatch '^[A-Za-z0-9_@.{}-]{1,256}$') { continue }
 
                 $extensionSettings = $null
                 $settingsKey = $extensionId.ToLowerInvariant()
                 if ($configuredExtensions.ContainsKey($settingsKey)) { $extensionSettings = $configuredExtensions[$settingsKey] }
+                if (Test-IsChromiumComponentSetting -ExtensionSetting $extensionSettings) { continue }
                 $active = $true
                 if ($null -ne $extensionSettings -and $null -ne $extensionSettings.state) { $active = ([int]$extensionSettings.state -ne 0) }
                 if (-not $IncludeInactive -and -not $active) { continue }
@@ -242,12 +387,16 @@ function Get-ChromiumExtensions {
                     continue
                 }
 
-                try {
-                    $versionDirectories = @(Get-ChildItem -LiteralPath $extensionDirectory.FullName -Directory -ErrorAction Stop | Sort-Object {
-                        Get-ExtensionVersionKey -VersionText $_.Name
-                    } -Descending)
-                } catch {
-                    continue
+                if (-not [string]::IsNullOrWhiteSpace([string]$extensionCandidate.DirectVersionPath)) {
+                    $versionDirectories = @([PSCustomObject]@{ Name = Split-Path $extensionCandidate.DirectVersionPath -Leaf; FullName = $extensionCandidate.DirectVersionPath })
+                } else {
+                    try {
+                        $versionDirectories = @(Get-ChildItem -LiteralPath $extensionCandidate.FullName -Directory -ErrorAction Stop | Sort-Object {
+                            Get-ExtensionVersionKey -VersionText $_.Name
+                        } -Descending)
+                    } catch {
+                        continue
+                    }
                 }
 
                 if ($null -ne $extensionSettings -and -not [string]::IsNullOrWhiteSpace([string]$extensionSettings.path)) {
@@ -263,7 +412,7 @@ function Get-ChromiumExtensions {
                     $manifestPath = Join-Path $versionDirectory.FullName 'manifest.json'
                     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { continue }
                     try {
-                        $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                        $manifest = Read-BrowserJsonDocument -Path $manifestPath
                         $selected = [PSCustomObject]@{ Directory = $versionDirectory; Manifest = $manifest }
                         break
                     } catch {
@@ -273,6 +422,7 @@ function Get-ChromiumExtensions {
                 if ($null -eq $selected) { continue }
 
                 $manifest = $selected.Manifest
+                if ($null -ne $manifest.theme -or $null -ne $manifest.app) { continue }
                 $name = [string]$manifest.name
                 if ($name -match '^__MSG_(.+)__$') {
                     $resolvedName = Resolve-ManifestMessage -Manifest $manifest -BasePath $selected.Directory.FullName -MessageKey $matches[1]
@@ -287,6 +437,7 @@ function Get-ChromiumExtensions {
                     VersionKey    = Get-ExtensionVersionKey -VersionText $manifest.version
                     Publisher     = Get-NormalizedPublisher -Manifest $manifest
                     BrowserFamily = $browserName
+                    WindowsUser   = $browserRoot.UserName
                     ProfileName   = Get-ChromiumProfileDisplayName -LocalState $localState -DirectoryName $browserProfile.Name
                     ProfilePath   = $browserProfile.FullName
                     IconPath      = Resolve-ExtensionIconPath -Manifest $manifest -BasePath $selected.Directory.FullName
@@ -304,6 +455,7 @@ function Get-ChromiumExtensions {
         $locations = foreach ($item in $items) {
             [PSCustomObject]@{
                 Browser = $item.BrowserFamily
+                WindowsUser = $item.WindowsUser
                 ProfileName = $item.ProfileName
                 ProfilePath = $item.ProfilePath
                 Version = $item.Version
@@ -320,7 +472,7 @@ function Get-ChromiumExtensions {
             Publisher = $first.Publisher
             IconPath = if ($null -ne $iconItem) { $iconItem.IconPath } else { '' }
             BrowserFamily = @($items | Select-Object -ExpandProperty BrowserFamily -Unique)
-            Locations = @($locations | Sort-Object Browser, ProfilePath -Unique)
+            Locations = @($locations | Sort-Object WindowsUser, Browser, ProfilePath -Unique)
             Ecosystem = 'Chromium'
             Active = (@($items | Where-Object { $_.Active }).Count -gt 0)
         }
@@ -363,18 +515,18 @@ function Test-IsFirefoxSystemAddon {
 }
 
 function Get-FirefoxExtensions {
-    param([switch]$IncludeInactive)
-    $appData = [Environment]::GetFolderPath('ApplicationData')
-    $firefoxRoot = Join-Path $appData 'Mozilla\Firefox'
-    $profilesIniPath = Join-Path $firefoxRoot 'profiles.ini'
-    try { $profiles = @(Get-FirefoxProfileRecords -ProfilesIniPath $profilesIniPath -FirefoxRoot $firefoxRoot) } catch { return @() }
+    param([switch]$IncludeInactive, [switch]$AllUsers)
 
     $allExtensions = @()
-    foreach ($firefoxProfile in $profiles) {
+    foreach ($userProfile in @(Get-ExtensionUserProfiles -AllUsers:$AllUsers)) {
+        $firefoxRoot = Join-Path $userProfile.RoamingAppData 'Mozilla\Firefox'
+        $profilesIniPath = Join-Path $firefoxRoot 'profiles.ini'
+        try { $profiles = @(Get-FirefoxProfileRecords -ProfilesIniPath $profilesIniPath -FirefoxRoot $firefoxRoot) } catch { continue }
+        foreach ($firefoxProfile in $profiles) {
         $extensionsPath = Join-Path $firefoxProfile.Path 'extensions.json'
         if (-not (Test-Path -LiteralPath $extensionsPath -PathType Leaf)) { continue }
         try {
-            $extensionData = Get-Content -LiteralPath $extensionsPath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            $extensionData = Read-BrowserJsonDocument -Path $extensionsPath
         } catch {
             continue
         }
@@ -400,9 +552,11 @@ function Get-FirefoxExtensions {
                 IconPath = Resolve-FirefoxIconPath -Addon $addon -ProfilePath $firefoxProfile.Path
                 Active = [bool]$addon.active
                 SignedState = $addon.signedState
+                WindowsUser = $userProfile.UserName
                 ProfileName = $firefoxProfile.Name
                 ProfilePath = $firefoxProfile.Path
             }
+        }
         }
     }
 
@@ -413,7 +567,7 @@ function Get-FirefoxExtensions {
         $first = $items[0]
         $iconItem = $items | Where-Object { -not [string]::IsNullOrWhiteSpace($_.IconPath) } | Select-Object -First 1
         $locations = foreach ($item in $items) {
-            [PSCustomObject]@{ Browser = 'Firefox'; ProfileName = $item.ProfileName; ProfilePath = $item.ProfilePath; Version = $item.Version }
+            [PSCustomObject]@{ Browser = 'Firefox'; WindowsUser = $item.WindowsUser; ProfileName = $item.ProfileName; ProfilePath = $item.ProfilePath; Version = $item.Version }
         }
         $uniqueVersions = @($items | Select-Object -ExpandProperty Version -Unique)
         $displayVersion = if ($uniqueVersions.Count -gt 1) { $uniqueVersions -join ', ' } else { $first.Version }
@@ -427,7 +581,7 @@ function Get-FirefoxExtensions {
             Active = (@($items | Where-Object { $_.Active }).Count -gt 0)
             SignedState = $first.SignedState
             BrowserFamily = @('Firefox')
-            Locations = @($locations | Sort-Object ProfilePath -Unique)
+            Locations = @($locations | Sort-Object WindowsUser, ProfilePath -Unique)
             Ecosystem = 'Firefox'
         }
     }
