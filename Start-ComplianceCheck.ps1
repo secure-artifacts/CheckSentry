@@ -1590,14 +1590,17 @@ function Convert-InputToRule {
 
     param($Data, [string]$TargetSheet)
     $sheet = Assert-AllowedSheet -SheetName $TargetSheet
-    $itemType = Get-LimitedText -Value $Data.type -FieldName '类型' -MaximumLength 32 -Required
+    $itemType = (Get-LimitedText -Value $Data.type -FieldName '类型' -MaximumLength 32 -Required).Trim()
     if ($script:AllowedItemTypes -notcontains $itemType) { throw "不允许的类型：$itemType" }
-    $matchType = Get-LimitedText -Value $Data.matchType -FieldName '匹配方式' -MaximumLength 32 -Required
+    $matchType = (Get-LimitedText -Value $Data.matchType -FieldName '匹配方式' -MaximumLength 32 -Required).Trim()
     if ($script:AllowedMatchTypes -notcontains $matchType) { throw "不允许的匹配方式：$matchType" }
-    $extensionId = Get-LimitedText -Value $Data.extId -FieldName '插件ID' -MaximumLength 256
+    $extensionId = ConvertTo-CanonicalExtensionId -Value (Get-LimitedText -Value $Data.extId -FieldName '插件ID' -MaximumLength 256) -ItemType $itemType
     $namePattern = Get-LimitedText -Value $Data.namePattern -FieldName '软件名关键词' -MaximumLength 512 -Required
     if ($itemType -eq '软件' -and $matchType -eq '插件ID精确') { throw '软件规则不能使用插件ID精确。' }
     if ($matchType -eq '插件ID精确' -and [string]::IsNullOrWhiteSpace($extensionId)) { throw '插件ID精确规则必须填写插件ID。' }
+    if ($itemType -eq 'Chromium插件' -and $matchType -eq '插件ID精确' -and $extensionId -notmatch '^[a-p]{32}$') {
+        throw 'Chromium 插件ID必须是 32 位 a-p 字符，或完整的 chrome-extension:// 地址。'
+    }
     if ($matchType -eq '正则') {
         try {
             $regex = New-Object System.Text.RegularExpressions.Regex($namePattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase, [TimeSpan]::FromMilliseconds(250))
@@ -1663,7 +1666,7 @@ function Get-RuleIdentity {
         $versionKey = $versionParts -join ','
         return (ConvertTo-Json -InputObject @('软件', $nameKey, $publisherKey, $versionKey) -Compress)
     }
-    return ($ItemType + '|' + ([string]$ExtensionId).Trim().ToLowerInvariant())
+    return ($ItemType + '|' + (ConvertTo-CanonicalExtensionId -Value $ExtensionId -ItemType $ItemType))
 }
 
 function Get-WorksheetRowIdentity {
@@ -1802,6 +1805,20 @@ function ConvertTo-MatchComparableText {
     return [regex]::Replace($normalized, '\s+', ' ').Trim()
 }
 
+function ConvertTo-CanonicalExtensionId {
+    param([object]$Value, [string]$ItemType = '')
+    $text = [string]$Value
+    if ([string]::IsNullOrWhiteSpace($text)) { return '' }
+    $text = $text.Normalize([System.Text.NormalizationForm]::FormKC)
+    # 清除从网页、Google Sheets、地址栏复制时常见的不可见字符；插件 ID 本身不允许包含空白。
+    $text = [regex]::Replace($text, '[\u0000-\u0020\u007F\u00A0\u200B-\u200F\u202A-\u202E\u2060\uFEFF]', '')
+    $text = $text.Trim('"', "'")
+    if ($ItemType -eq 'Chromium插件' -and $text -match '^(?i:chrome-extension://)([a-p]{32})(?:/.*)?$') {
+        $text = $matches[1]
+    }
+    return $text.ToLowerInvariant()
+}
+
 function Get-RuleVersionPatterns {
     param([string]$RuleVersion)
     $text = ConvertTo-MatchComparableText $RuleVersion
@@ -1864,8 +1881,11 @@ function Get-EffectiveRuleMatchFields {
 function Test-NameMatch {
     param([string]$InstalledName, $Rule)
     if ($Rule.'匹配方式' -eq '插件ID精确') {
-        if ([string]::IsNullOrWhiteSpace([string]$Rule.'插件ID')) { return $false }
-        return [string]::Equals($InstalledName, [string]$Rule.'插件ID', [System.StringComparison]::OrdinalIgnoreCase)
+        $ruleType = [string]$Rule.'类型'
+        $installedId = ConvertTo-CanonicalExtensionId -Value $InstalledName -ItemType $ruleType
+        $ruleId = ConvertTo-CanonicalExtensionId -Value $Rule.'插件ID' -ItemType $ruleType
+        if ([string]::IsNullOrWhiteSpace($ruleId)) { return $false }
+        return [string]::Equals($installedId, $ruleId, [System.StringComparison]::Ordinal)
     }
     $effectiveRule = Get-EffectiveRuleMatchFields -Rule $Rule
     $pattern = [string]$effectiveRule.NamePattern
@@ -1918,7 +1938,8 @@ function New-RuleMatcher {
         $effectiveRule = Get-EffectiveRuleMatchFields -Rule $rule
         $matchType = [string]$effectiveRule.MatchType
         if ($matchType -eq '插件ID精确') {
-            $key = ([string]$rule.'插件ID').Trim()
+            $key = ConvertTo-CanonicalExtensionId -Value $rule.'插件ID' -ItemType $ruleType
+            if ([string]::IsNullOrWhiteSpace($key)) { continue }
             if (-not $extensionIds.ContainsKey($key)) { $extensionIds[$key] = @() }
             $extensionIds[$key] = @($extensionIds[$key]) + $entry
         } elseif ($matchType -eq '精确' -and -not $effectiveRule.EmbeddedVersion) {
@@ -1937,7 +1958,8 @@ function Find-FirstMatchingRule {
     $candidateRules = @($Rules)
     if ($null -ne $Rules -and $Rules.IsRuleMatcher -eq $true) {
         $candidateEntries = @()
-        if (-not [string]::IsNullOrWhiteSpace($ExtensionId) -and $Rules.ExtensionIds.ContainsKey($ExtensionId)) { $candidateEntries += @($Rules.ExtensionIds[$ExtensionId]) }
+        $canonicalExtensionId = ConvertTo-CanonicalExtensionId -Value $ExtensionId -ItemType $ItemType
+        if (-not [string]::IsNullOrWhiteSpace($canonicalExtensionId) -and $Rules.ExtensionIds.ContainsKey($canonicalExtensionId)) { $candidateEntries += @($Rules.ExtensionIds[$canonicalExtensionId]) }
         $normalizedDisplayName = ConvertTo-MatchComparableText $DisplayName
         if ($Rules.ExactNames.ContainsKey($normalizedDisplayName)) { $candidateEntries += @($Rules.ExactNames[$normalizedDisplayName]) }
         $candidateEntries += @($Rules.Fallback)
@@ -1963,11 +1985,28 @@ function Find-BlacklistedPluginNameCollision {
     foreach ($rule in @($Rules)) {
         $ruleType = if ([string]::IsNullOrWhiteSpace([string]$rule.'类型')) { '软件' } else { [string]$rule.'类型' }
         if ($ruleType -ne $ItemType -or [string]$rule.'匹配方式' -ne '插件ID精确') { continue }
-        $ruleExtensionId = ([string]$rule.'插件ID').Trim()
-        if ([string]::Equals($ruleExtensionId, ([string]$ExtensionId).Trim(), [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+        $ruleExtensionId = ConvertTo-CanonicalExtensionId -Value $rule.'插件ID' -ItemType $ruleType
+        $installedExtensionId = ConvertTo-CanonicalExtensionId -Value $ExtensionId -ItemType $ItemType
+        if ([string]::Equals($ruleExtensionId, $installedExtensionId, [System.StringComparison]::Ordinal)) { continue }
         $ruleName = ConvertTo-MatchComparableText ([string]$rule.'软件名关键词')
         if ([string]::IsNullOrWhiteSpace($ruleName)) { continue }
         if ([string]::Equals($ruleName, $installedName, [System.StringComparison]::OrdinalIgnoreCase)) { return $rule }
+    }
+    return $null
+}
+
+function Find-WhitelistedPluginNameCollision {
+    param($Rules, [string]$ItemType, [string]$DisplayName, [string]$ExtensionId)
+    if ($ItemType -eq '软件' -or [string]::IsNullOrWhiteSpace($DisplayName)) { return $null }
+    $installedName = ConvertTo-MatchComparableText $DisplayName
+    $installedExtensionId = ConvertTo-CanonicalExtensionId -Value $ExtensionId -ItemType $ItemType
+    foreach ($rule in @($Rules)) {
+        $ruleType = if ([string]::IsNullOrWhiteSpace([string]$rule.'类型')) { '软件' } else { [string]$rule.'类型' }
+        if ($ruleType -ne $ItemType -or [string]$rule.'匹配方式' -ne '插件ID精确') { continue }
+        $ruleName = ConvertTo-MatchComparableText ([string]$rule.'软件名关键词')
+        if (-not [string]::Equals($ruleName, $installedName, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+        $ruleExtensionId = ConvertTo-CanonicalExtensionId -Value $rule.'插件ID' -ItemType $ruleType
+        if (-not [string]::Equals($ruleExtensionId, $installedExtensionId, [System.StringComparison]::Ordinal)) { return $rule }
     }
     return $null
 }
@@ -2079,6 +2118,16 @@ function Get-ComplianceResult {
             if ($null -ne $blackNameCollision) {
                 $blackId = [string]$blackNameCollision.'插件ID'
                 $reason = "名称与黑名单插件相同，但插件 ID 不同，请人工确认。黑名单 ID：$blackId；当前 ID：$extensionId"
+                $results += New-ComplianceItem -Source $item -ItemType $ItemType -Status '待定' -Reason $reason -MatchedRule $null -MatchedSheet ''
+                continue
+            }
+            $whiteNameCollision = Find-WhitelistedPluginNameCollision -Rules $WhiteRules -ItemType $ItemType -DisplayName $displayName -ExtensionId $extensionId
+            if ($null -ne $whiteNameCollision) {
+                $whiteId = ConvertTo-CanonicalExtensionId -Value $whiteNameCollision.'插件ID' -ItemType $ItemType
+                $currentId = ConvertTo-CanonicalExtensionId -Value $extensionId -ItemType $ItemType
+                $isDeveloperLoaded = @($item.InstallLocations | Where-Object { $_ -in @(4, 8) }).Count -gt 0
+                $developerHint = if ($isDeveloperLoaded) { ' 此插件由开发者模式加载；manifest.json 未固定 key 时，插件 ID 可能随安装路径变化。' } else { '' }
+                $reason = "名称与白名单插件相同，但插件 ID 不同，不能自动放行。白名单 ID：$whiteId；当前 ID：$currentId。$developerHint"
                 $results += New-ComplianceItem -Source $item -ItemType $ItemType -Status '待定' -Reason $reason -MatchedRule $null -MatchedSheet ''
                 continue
             }
@@ -2429,7 +2478,9 @@ function Get-RuleIconKey {
             if (-not (Test-PublisherMatch -InstalledPublisher ([string]$reportRecord.Publisher) -RulePublisher $Rule.'发布者')) { continue }
             return [string]$reportRecord.IconKey
         }
-        if ([string]::Equals([string]$reportRecord.ExtensionId, [string]$Rule.'插件ID', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $reportExtensionId = ConvertTo-CanonicalExtensionId -Value $reportRecord.ExtensionId -ItemType $itemType
+        $ruleExtensionId = ConvertTo-CanonicalExtensionId -Value $Rule.'插件ID' -ItemType $itemType
+        if ([string]::Equals($reportExtensionId, $ruleExtensionId, [System.StringComparison]::Ordinal)) {
             return [string]$reportRecord.IconKey
         }
     }

@@ -430,6 +430,11 @@ function Get-ChromiumExtensions {
                 }
                 if ([string]::IsNullOrWhiteSpace($name)) { $name = $extensionId }
 
+                $installLocation = 0
+                if ($null -ne $extensionSettings -and $null -ne $extensionSettings.location) {
+                    [int]::TryParse([string]$extensionSettings.location, [ref]$installLocation) | Out-Null
+                }
+
                 $allExtensions += [PSCustomObject]@{
                     ExtensionId   = $extensionId
                     Name          = $name
@@ -442,6 +447,7 @@ function Get-ChromiumExtensions {
                     ProfilePath   = $browserProfile.FullName
                     IconPath      = Resolve-ExtensionIconPath -Manifest $manifest -BasePath $selected.Directory.FullName
                     Active        = $active
+                    InstallLocation = $installLocation
                 }
             }
         }
@@ -472,6 +478,7 @@ function Get-ChromiumExtensions {
             Publisher = $first.Publisher
             IconPath = if ($null -ne $iconItem) { $iconItem.IconPath } else { '' }
             BrowserFamily = @($items | Select-Object -ExpandProperty BrowserFamily -Unique)
+            InstallLocations = @($items | Select-Object -ExpandProperty InstallLocation -Unique)
             Locations = @($locations | Sort-Object WindowsUser, Browser, ProfilePath -Unique)
             Ecosystem = 'Chromium'
             Active = (@($items | Where-Object { $_.Active }).Count -gt 0)

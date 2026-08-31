@@ -98,6 +98,19 @@ Assert-True ($blackClickCleanResult.Count -eq 1 -and $blackClickCleanResult[0].�
 $unknownClickCleanResult = @(Get-ComplianceResult -Installed @(New-TestExtension 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa') -BlackRules @($clickCleanBlackRule) -WhiteRules @($clickCleanWhiteRule) -PendingRules @() -ItemType 'Chromium插件')
 Assert-True ($unknownClickCleanResult.Count -eq 1 -and $unknownClickCleanResult[0].状态 -eq '待定' -and $unknownClickCleanResult[0].原因 -match '名称与黑名单插件相同.*插件 ID 不同') '同名但陌生 ID 的插件必须进入待定并给出风险原因。'
 
+$highlightExtensionId = 'ibocimhdhiiccenajinccijhmgenlnlc'
+$highlightRuleWithInvisibleText = [PSCustomObject]@{
+    类型='Chromium插件'; 匹配方式='插件ID精确'; 软件名关键词='高亮插件'
+    插件ID=($highlightExtensionId + [char]0x200B + [char]0x00A0); 版本号='3.0.0'; 发布者=''
+}
+$highlightInstalled = [PSCustomObject]@{ Name='高亮插件'; ExtensionId=$highlightExtensionId; Version='3.0.0'; Versions=@('3.0.0'); Publisher=''; Locations=@(); IconPath=''; Active=$true }
+$highlightResult = @(Get-ComplianceResult -Installed @($highlightInstalled) -BlackRules @() -WhiteRules @($highlightRuleWithInvisibleText) -PendingRules @() -ItemType 'Chromium插件')
+Assert-True ($highlightResult.Count -eq 1 -and $highlightResult[0].状态 -eq '已匹配') '云端插件 ID 含零宽字符或不换行空格时，仍必须按同一 ID 命中白名单。'
+Assert-True ((ConvertTo-CanonicalExtensionId -Value ('chrome-extension://' + $highlightExtensionId + '/src/scopes/options/index.html') -ItemType 'Chromium插件') -eq $highlightExtensionId) '从地址栏复制的完整 chrome-extension:// 地址必须提取出准确插件 ID。'
+$differentDeveloperExtension = [PSCustomObject]@{ Name='高亮插件'; ExtensionId='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; Version='3.0.0'; Versions=@('3.0.0'); Publisher=''; Locations=@(); IconPath=''; Active=$true; InstallLocations=@(4) }
+$differentDeveloperResult = @(Get-ComplianceResult -Installed @($differentDeveloperExtension) -BlackRules @() -WhiteRules @($highlightRuleWithInvisibleText) -PendingRules @() -ItemType 'Chromium插件')
+Assert-True ($differentDeveloperResult.Count -eq 1 -and $differentDeveloperResult[0].状态 -eq '待定' -and $differentDeveloperResult[0].原因 -match '开发者模式.*ID 可能随安装路径变化') '开发者插件实际 ID 与白名单不同时必须保持待定并明确说明路径派生 ID 风险。'
+
 Assert-XlsxArchiveComplete -Path (Join-Path $root 'list_template.xlsx')
 $cloudStats = Get-CloudRuleStats -AllRules ([PSCustomObject]@{ '白名单'=@(1,2); '待定'=@(3); '黑名单'=@(4,5,6) })
 Assert-True ($cloudStats.TotalCount -eq 6 -and $cloudStats.WhiteCount -eq 2 -and $cloudStats.PendingCount -eq 1 -and $cloudStats.BlackCount -eq 3) '云端规则分表数量统计必须准确。'
