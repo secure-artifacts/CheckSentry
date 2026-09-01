@@ -770,11 +770,13 @@ function Convert-CloudWorksheetToRules {
                 $location = if ($columnName) { "${columnName}${row}（$fieldName）" } else { "第 $row 行 B:K" }
                 $preview = ''
                 $singleLine = ''
+                $warningMessage = $detail
                 if ($columnName) {
                     $rawValue = [string]$ordered[$fieldName]
                     $singleLine = ($rawValue -replace '[\r\n\t]+', ' ').Trim()
                     if ($singleLine.Length -gt 60) { $singleLine = $singleLine.Substring(0, 60) + '…' }
                     $preview = " 当前值长度：$($rawValue.Length)；预览：【$singleLine】。"
+                    $warningMessage = "$detail 当前值长度：$($rawValue.Length)。"
                 }
                 if ($null -eq $ValidationWarnings) { throw "云端工作表【$SheetName】单元格 $location 校验失败：$detail$preview" }
                 $null = $ValidationWarnings.Add([PSCustomObject]@{
@@ -782,7 +784,7 @@ function Convert-CloudWorksheetToRules {
                     Row = $row
                     Cell = if ($columnName) { "${columnName}${row}" } else { "B${row}:K${row}" }
                     Field = $fieldName
-                    Message = $detail
+                    Message = $warningMessage
                     Preview = $singleLine
                 })
                 $validatedRule = $null
