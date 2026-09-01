@@ -45,6 +45,14 @@
   .selected-count { color: #555; font-size: 12px; white-space: nowrap; }
   .cloud-status { color: #666; font-size: 12px; white-space: nowrap; }
   .cloud-status.configured { color: #2f855a; }
+  .cloud-validation-warnings { display: none; margin: 0 0 16px; border: 1px solid #e0a800; border-radius: 8px; background: #fff8db; color: #6b4f00; }
+  .cloud-validation-warnings.visible { display: block; }
+  .cloud-validation-warnings > summary { cursor: pointer; padding: 10px 14px; font-weight: 700; }
+  table.cloud-warning-table { border: 0; border-top: 1px solid #e7ca64; border-radius: 0; background: #fffdf3; font-size: 12.5px; }
+  table.cloud-warning-table th, table.cloud-warning-table td { height: auto; padding: 7px 10px; white-space: normal; overflow-wrap: anywhere; color: #5f4700; }
+  table.cloud-warning-table th:nth-child(1), table.cloud-warning-table td:nth-child(1) { width: 14%; }
+  table.cloud-warning-table th:nth-child(2), table.cloud-warning-table td:nth-child(2) { width: 48%; }
+  table.cloud-warning-table th:nth-child(3), table.cloud-warning-table td:nth-child(3) { width: 38%; }
   .select-cell { width: 42px; text-align: center; }
   .row-select { width: 15px; height: 15px; vertical-align: middle; }
   .readonly-meta { color: #666; background: #fafafa; }
@@ -161,7 +169,15 @@
     <button id="addRuleButton">+ 新增规则</button>
 
   </div>
-  
+
+  <details id="cloudValidationWarnings" class="cloud-validation-warnings" open>
+    <summary id="cloudValidationWarningsTitle">云端规则校验提示</summary>
+    <table class="cloud-warning-table">
+      <thead><tr><th>位置</th><th>问题</th><th>当前值</th></tr></thead>
+      <tbody id="cloudValidationWarningsBody"></tbody>
+    </table>
+  </details>
+
   <table id="rulesTable">
     <thead>
             <tr id="tableHeader">
@@ -268,8 +284,8 @@
         </div>
         
         <div class="form-group" id="groupExtId" style="display:none;">
-          <label>插件ID</label>
-          <input type="text" id="formExtId" maxlength="256">
+          <label>插件ID（多个可信 ID 可用逗号分隔）</label>
+          <input type="text" id="formExtId" maxlength="2048">
         </div>
         
         <div class="form-group">
@@ -619,8 +635,35 @@ function showToast(msg, isError) {
   const t = document.getElementById('toast');
   t.textContent = msg;
   t.style.background = isError ? '#c0392b' : '#333';
+  t.style.cursor = isError ? 'pointer' : 'default';
+  t.title = isError ? '点击关闭' : '';
+  t.onclick = isError ? function() { t.classList.remove('show'); } : null;
   t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), 2000);
+  if (t._hideTimer) clearTimeout(t._hideTimer);
+  if (!isError) t._hideTimer = setTimeout(() => t.classList.remove('show'), 4000);
+}
+
+function updateCloudWarnings(syncState) {
+  const state = syncState || {};
+  const warnings = state.ValidationWarnings || state.validationWarnings || [];
+  const panel = document.getElementById('cloudValidationWarnings');
+  const title = document.getElementById('cloudValidationWarningsTitle');
+  const body = document.getElementById('cloudValidationWarningsBody');
+  if (!panel || !title || !body) return;
+  if (!Array.isArray(warnings) || warnings.length === 0) {
+    panel.classList.remove('visible');
+    body.innerHTML = '';
+    return;
+  }
+  title.textContent = `云端规则校验提示：已跳过 ${warnings.length} 条无效规则（不会阻止软件使用）`;
+  body.innerHTML = warnings.slice(0, 100).map(function(item) {
+    const sheet = item.Sheet || item.sheet || '';
+    const cell = item.Cell || item.cell || '';
+    const message = item.Message || item.message || '';
+    const preview = item.Preview || item.preview || '';
+    return `<tr><td>${escapeHtml(sheet)}！${escapeHtml(cell)}</td><td>${escapeHtml(message)}</td><td>${escapeHtml(preview)}</td></tr>`;
+  }).join('');
+  panel.classList.add('visible');
 }
 
 function updateCloudStatus(configured, syncState) {
@@ -628,18 +671,22 @@ function updateCloudStatus(configured, syncState) {
   const status = document.getElementById('cloudStatus');
   if (!status) return;
   if (!cloudConfigured) {
+    updateCloudWarnings({});
     status.textContent = '云端：未配置';
     status.classList.remove('configured');
+    status.style.color = '';
     status.title = '尚未配置 Google Sheets 只读规则模板';
     return;
   }
   const state = syncState || {};
+  updateCloudWarnings(state);
   const mode = state.UsingCache || state.usingCache ? '缓存' : (state.Status || state.status || '已配置');
   const white = state.WhiteCount ?? state.whiteCount ?? 0;
   const pending = state.PendingCount ?? state.pendingCount ?? 0;
   const black = state.BlackCount ?? state.blackCount ?? 0;
   status.textContent = `云端：${mode}｜白 ${white}｜待 ${pending}｜黑 ${black}`;
   status.classList.toggle('configured', mode !== '失败');
+  status.style.color = mode === '失败' ? '#c0392b' : (mode === '有警告' ? '#9c6500' : '');
   status.title = state.Message || state.message || '云端规则状态';
 }
 
@@ -679,7 +726,8 @@ async function saveCloudSettings(evt) {
     updateCloudStatus(true, data);
     closeCloudModal();
     selectedRuleKeys = {};
-    showToast(`云端清单已验证：白 ${data.whiteCount}｜待 ${data.pendingCount}｜黑 ${data.blackCount}`, false);
+    const warningText = Number(data.warningCount || 0) > 0 ? `｜跳过无效 ${data.warningCount}` : '';
+    showToast(`云端清单已验证：白 ${data.whiteCount}｜待 ${data.pendingCount}｜黑 ${data.blackCount}${warningText}`, false);
     await loadData();
   } catch (e) {
     showToast('云端设置失败: ' + e.message, true);
@@ -708,7 +756,8 @@ async function syncCloudRules() {
     }
     updateCloudStatus(true, data);
     selectedRuleKeys = {};
-    showToast(data.usingCache ? '云端暂时不可用，已使用上次完整快照' : (data.changed ? ('云端同步完成：' + data.count + ' 条规则') : '云端规则已完整验证'), false);
+    const warningText = Number(data.warningCount || 0) > 0 ? `，跳过 ${data.warningCount} 条无效规则` : '';
+    showToast(data.usingCache ? '云端暂时不可用，已使用上次完整快照' : (data.changed ? (`云端同步完成：${data.count} 条规则${warningText}`) : (`云端规则已完整验证${warningText}`)), false);
     await loadData();
   } catch (e) {
     showToast('云端同步失败，本地清单未改变: ' + e.message, true);

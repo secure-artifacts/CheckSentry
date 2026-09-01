@@ -48,6 +48,8 @@ $script:CloudSyncState = [PSCustomObject]@{
     PendingCount = 0
     BlackCount = 0
     RuleHash = ''
+    WarningCount = 0
+    ValidationWarnings = @()
 }
 
 function Initialize-ImportExcel {
@@ -192,6 +194,28 @@ function Get-UserNoteText {
     return $text
 }
 
+function ConvertTo-CanonicalAddedTime {
+    param([object]$Value)
+    if ($null -eq $Value) { return '' }
+    if ($Value -is [DateTime]) { return ([DateTime]$Value).ToString('yyyy-MM-dd HH:mm') }
+    if ($Value -is [DateTimeOffset]) { return ([DateTimeOffset]$Value).ToString('yyyy-MM-dd HH:mm') }
+
+    $text = ([string]$Value).Trim()
+    if ([string]::IsNullOrWhiteSpace($text)) { return '' }
+    $serial = [double]0
+    if ([double]::TryParse($text, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$serial) -and $serial -ge 1 -and $serial -le 2958465) {
+        try { return [DateTime]::FromOADate($serial).ToString('yyyy-MM-dd HH:mm') } catch {}
+    }
+
+    $parsed = [DateTime]::MinValue
+    foreach ($culture in @([System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.CultureInfo]::CurrentCulture)) {
+        if ([DateTime]::TryParse($text, $culture, [System.Globalization.DateTimeStyles]::AllowWhiteSpaces, [ref]$parsed)) {
+            return $parsed.ToString('yyyy-MM-dd HH:mm')
+        }
+    }
+    return $text
+}
+
 function Convert-RuleSheetToCanonical {
     param($Package, [string]$SheetName)
     $sheet = Assert-AllowedSheet -SheetName $SheetName
@@ -221,7 +245,7 @@ function Convert-RuleSheetToCanonical {
                 '备注/原因' = $noteOrReason
                 '备注/原因链接' = Get-CellHyperlinkUrl -Cell (Get-RuleSheetCell -Worksheet $worksheet -HeaderMap $headerMap -Row $row -Names @('备注/原因', '备注', '禁止原因'))
                 添加人 = Get-RuleSheetCellValue -Worksheet $worksheet -HeaderMap $headerMap -Row $row -Names @('添加人')
-                添加时间 = Get-RuleSheetCellValue -Worksheet $worksheet -HeaderMap $headerMap -Row $row -Names @('添加时间')
+                添加时间 = ConvertTo-CanonicalAddedTime (Get-RuleSheetCellValue -Worksheet $worksheet -HeaderMap $headerMap -Row $row -Names @('添加时间'))
             }
             $records += [PSCustomObject]$record
         }
@@ -306,6 +330,52 @@ function Ensure-CanonicalWorkbookSchema {
         Repair-WorkbookSchema -Path $Path
         Write-Host "清单字段已统一为状态/分类与备注/原因：$Path" -ForegroundColor Green
     }
+}
+
+function Repair-WorkbookAddedTimes {
+    param([string]$Path)
+    $needsRepair = $false
+    $package = $null
+    try {
+        $package = Open-ExcelPackage -Path $Path -ErrorAction Stop
+        foreach ($sheetName in $script:AllowedSheets) {
+            $worksheet = $package.Workbook.Worksheets[$sheetName]
+            if ($null -eq $worksheet.Dimension) { continue }
+            $column = [array]::IndexOf((Get-ExpectedHeaders -SheetName $sheetName), '添加时间') + 1
+            for ($row = 2; $row -le $worksheet.Dimension.End.Row; $row++) {
+                $raw = $worksheet.Cells[$row, $column].Value
+                if ($null -eq $raw -or [string]::IsNullOrWhiteSpace([string]$raw)) { continue }
+                if ((ConvertTo-CanonicalAddedTime $raw) -ne ([string]$raw).Trim() -or $raw -isnot [string]) { $needsRepair = $true; break }
+            }
+            if ($needsRepair) { break }
+        }
+    } finally {
+        if ($null -ne $package) { $package.Dispose() }
+    }
+    if (-not $needsRepair) { return 0 }
+
+    $operation = {
+        param($workbook)
+        $updated = 0
+        foreach ($sheetName in $script:AllowedSheets) {
+            $worksheet = $workbook.Workbook.Worksheets[$sheetName]
+            if ($null -eq $worksheet.Dimension) { continue }
+            $column = [array]::IndexOf((Get-ExpectedHeaders -SheetName $sheetName), '添加时间') + 1
+            for ($row = 2; $row -le $worksheet.Dimension.End.Row; $row++) {
+                $cell = $worksheet.Cells[$row, $column]
+                $raw = $cell.Value
+                if ($null -eq $raw -or [string]::IsNullOrWhiteSpace([string]$raw)) { continue }
+                $canonical = ConvertTo-CanonicalAddedTime $raw
+                if ($canonical -ne ([string]$raw).Trim() -or $raw -isnot [string]) {
+                    $cell.Value = $canonical
+                    $cell.Style.Numberformat.Format = '@'
+                    $updated++
+                }
+            }
+        }
+        return $updated
+    }
+    return Invoke-WorkbookTransaction -Path $Path -Operation $operation
 }
 
 function Assert-AllowedSheet {
@@ -572,6 +642,8 @@ function Convert-WorksheetToRules {
             if ($headers[$column - 1] -eq '备注/原因') {
                 $value = Get-UserNoteText $value
                 $ordered['备注/原因链接'] = Get-CellHyperlinkUrl -Cell $cell
+            } elseif ($headers[$column - 1] -eq '添加时间') {
+                $value = ConvertTo-CanonicalAddedTime $value
             }
             if ($null -ne $value -and -not [string]::IsNullOrWhiteSpace([string]$value)) { $hasValue = $true }
             $ordered[$headers[$column - 1]] = $value
@@ -626,7 +698,7 @@ function Import-AllRuleSheets {
 }
 
 function Convert-CloudWorksheetToRules {
-    param($Worksheet, [string]$SheetName)
+    param($Worksheet, [string]$SheetName, [System.Collections.ArrayList]$ValidationWarnings)
     $headers = Get-ExpectedHeaders -SheetName $SheetName
     $cloudHeaders = @($headers | Select-Object -Skip 1)
     $rules = @()
@@ -676,7 +748,7 @@ function Convert-CloudWorksheetToRules {
                 note = [string]$ordered['备注/原因']
                 noteLink = [string]$ordered['备注/原因链接']
                 addedBy = [string]$ordered['添加人']
-                addedTime = [string]$ordered['添加时间']
+                addedTime = ConvertTo-CanonicalAddedTime ($ordered['添加时间'])
             }
             try {
                 $validatedRule = Convert-InputToRule -Data $cloudData -TargetSheet $SheetName
@@ -695,18 +767,29 @@ function Convert-CloudWorksheetToRules {
                         break
                     }
                 }
-                $location = if ($columnName) { "$columnName$row（$fieldName）" } else { "第 $row 行 B:K" }
+                $location = if ($columnName) { "${columnName}${row}（$fieldName）" } else { "第 $row 行 B:K" }
                 $preview = ''
+                $singleLine = ''
                 if ($columnName) {
                     $rawValue = [string]$ordered[$fieldName]
                     $singleLine = ($rawValue -replace '[\r\n\t]+', ' ').Trim()
                     if ($singleLine.Length -gt 60) { $singleLine = $singleLine.Substring(0, 60) + '…' }
                     $preview = " 当前值长度：$($rawValue.Length)；预览：【$singleLine】。"
                 }
-                throw "云端工作表【$SheetName】单元格 $location 校验失败：$detail$preview"
+                if ($null -eq $ValidationWarnings) { throw "云端工作表【$SheetName】单元格 $location 校验失败：$detail$preview" }
+                $null = $ValidationWarnings.Add([PSCustomObject]@{
+                    Sheet = $SheetName
+                    Row = $row
+                    Cell = if ($columnName) { "${columnName}${row}" } else { "B${row}:K${row}" }
+                    Field = $fieldName
+                    Message = $detail
+                    Preview = $singleLine
+                })
+                $validatedRule = $null
             }
+            if ($null -eq $validatedRule) { continue }
             $validatedRule.添加人 = [string]$ordered['添加人']
-            $validatedRule.添加时间 = [string]$ordered['添加时间']
+            $validatedRule.添加时间 = ConvertTo-CanonicalAddedTime ($ordered['添加时间'])
             $rules += $validatedRule
         }
     }
@@ -719,13 +802,18 @@ function Import-CloudRuleSheets {
     for ($attempt = 1; $attempt -le 3; $attempt++) {
         $package = $null
         try {
+            # Windows PowerShell 5.1 对 List[object] 的数组展开存在兼容问题，会抛出
+            # “Argument types do not match”；ArrayList 在 5.1 和 PowerShell 7 均稳定。
+            $validationWarnings = New-Object System.Collections.ArrayList
             $package = Open-ExcelPackage -Path $Path -ErrorAction Stop
             $result = [ordered]@{}
             foreach ($sheetName in $script:AllowedSheets) {
                 $worksheet = $package.Workbook.Worksheets[$sheetName]
                 if ($null -eq $worksheet) { throw "云端模板缺少工作表【$sheetName】。" }
-                $result[$sheetName] = @(Convert-CloudWorksheetToRules -Worksheet $worksheet -SheetName $sheetName)
+                $result[$sheetName] = @(Convert-CloudWorksheetToRules -Worksheet $worksheet -SheetName $sheetName -ValidationWarnings $validationWarnings)
             }
+            $warningArray = $validationWarnings.ToArray()
+            $result['ValidationWarnings'] = $warningArray
             return [PSCustomObject]$result
         } catch {
             $lastError = $_
@@ -1171,7 +1259,7 @@ function Assert-XlsxArchiveComplete {
 
 function Download-GoogleSheetsWorkbookOnce {
     param([string]$Url)
-    $exportUrl = (Get-GoogleSheetsExportUrl -Url $Url) + '&checksentry=' + [guid]::NewGuid().ToString('N')
+    $exportUrl = (Get-GoogleSheetsExportUrl -Url $Url) + '&checksentry=' + [guid]::NewGuid().ToString('N') + '&ts=' + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     $temporaryPath = Join-Path ([System.IO.Path]::GetTempPath()) ('CheckSentry-cloud-' + [guid]::NewGuid().ToString('N') + '.xlsx')
     $maximumBytes = [int64]10485760
     $response = $null
@@ -1186,6 +1274,8 @@ function Download-GoogleSheetsWorkbookOnce {
         $request.AllowAutoRedirect = $true
         $request.MaximumAutomaticRedirections = 5
         $request.UserAgent = 'CheckSentry/1.0.5'
+        $request.CachePolicy = New-Object System.Net.Cache.RequestCachePolicy -ArgumentList ([System.Net.Cache.RequestCacheLevel]::Reload)
+        $request.Headers['Pragma'] = 'no-cache'
         $response = $request.GetResponse()
         $effectiveUri = $response.ResponseUri
         if ($null -eq $effectiveUri -or ($effectiveUri.Host -ne 'docs.google.com' -and -not $effectiveUri.Host.EndsWith('.googleusercontent.com', [StringComparison]::OrdinalIgnoreCase))) {
@@ -1301,36 +1391,66 @@ function New-CloudCandidateFromPath {
     Assert-XlsxArchiveComplete -Path $Path
     $rules = Import-CloudRuleSheets -Path $Path
     $stats = Get-CloudRuleStats -AllRules $rules
-    if ($stats.TotalCount -lt 1) { throw '云端三张规则表没有任何规则，已拒绝启用空白云端清单。' }
+    $validationWarnings = @($rules.ValidationWarnings)
+    if ($stats.TotalCount -lt 1 -and $validationWarnings.Count -lt 1) { throw '云端三张规则表没有任何规则，已拒绝启用空白云端清单。' }
     $hash = Get-TextSha256 -Text (Get-RuleSetFingerprint -AllRules $rules)
-    return [PSCustomObject]@{ Path = $Path; Source = $Source; Rules = $rules; Stats = $stats; RuleHash = $hash }
+    return [PSCustomObject]@{ Path = $Path; Source = $Source; Rules = $rules; Stats = $stats; RuleHash = $hash; ValidationWarnings = $validationWarnings }
 }
 
 function Get-ValidatedRemoteCloudCandidate {
-    param([string]$Url)
+    param([string]$Url, [switch]$ForceConfirmation)
     $firstPath = $null
     $secondPath = $null
+    $thirdPath = $null
+    $fourthPath = $null
     $returnPath = $null
     try {
         $firstPath = Download-GoogleSheetsWorkbook -Url $Url
         $firstCandidate = New-CloudCandidateFromPath -Path $firstPath -Source 'remote'
         $metadata = Read-CloudSyncMetadata
-        $requiresConfirmation = ($null -eq $metadata -or [string]$metadata.url -ne $Url.Trim() -or [string]$metadata.ruleHash -ne $firstCandidate.RuleHash)
+        $requiresConfirmation = ($ForceConfirmation.IsPresent -or $null -eq $metadata -or [string]$metadata.url -ne $Url.Trim() -or [string]$metadata.ruleHash -ne $firstCandidate.RuleHash)
         if (-not $requiresConfirmation) {
             $returnPath = $firstPath
             return $firstCandidate
         }
 
-        Start-Sleep -Milliseconds 750
+        Start-Sleep -Milliseconds 1500
         $secondPath = Download-GoogleSheetsWorkbook -Url $Url
         $secondCandidate = New-CloudCandidateFromPath -Path $secondPath -Source 'remote'
-        if ($firstCandidate.RuleHash -ne $secondCandidate.RuleHash) {
-            throw '连续两次下载的云端规则不一致，可能正在编辑或导出尚未稳定，本次未启用。'
+        if ($firstCandidate.RuleHash -eq $secondCandidate.RuleHash) {
+            if ($ForceConfirmation.IsPresent -and $null -ne $metadata -and [string]$metadata.ruleHash -eq $secondCandidate.RuleHash) {
+                # 手动同步即使前两次仍得到旧指纹，也再等待一次 Google 导出传播。
+                Start-Sleep -Milliseconds 2000
+                $thirdPath = Download-GoogleSheetsWorkbook -Url $Url
+                $thirdCandidate = New-CloudCandidateFromPath -Path $thirdPath -Source 'remote'
+                if ($secondCandidate.RuleHash -ne $thirdCandidate.RuleHash) {
+                    Start-Sleep -Milliseconds 1500
+                    $fourthPath = Download-GoogleSheetsWorkbook -Url $Url
+                    $fourthCandidate = New-CloudCandidateFromPath -Path $fourthPath -Source 'remote'
+                    if ($thirdCandidate.RuleHash -ne $fourthCandidate.RuleHash) {
+                        throw '云端规则正在更新，连续下载仍未稳定，本次未启用。'
+                    }
+                    $returnPath = $fourthPath
+                    return $fourthCandidate
+                }
+                $returnPath = $thirdPath
+                return $thirdCandidate
+            }
+            $returnPath = $secondPath
+            return $secondCandidate
         }
-        $returnPath = $secondPath
-        return $secondCandidate
+
+        # Google Sheets 导出可能正处于更新传播阶段；再取一次，只接受连续两次相同的新快照。
+        Start-Sleep -Milliseconds 1500
+        $thirdPath = Download-GoogleSheetsWorkbook -Url $Url
+        $thirdCandidate = New-CloudCandidateFromPath -Path $thirdPath -Source 'remote'
+        if ($secondCandidate.RuleHash -ne $thirdCandidate.RuleHash) {
+            throw '连续三次下载仍未得到稳定的云端规则，可能正在编辑或导出尚未完成，本次未启用。'
+        }
+        $returnPath = $thirdPath
+        return $thirdCandidate
     } finally {
-        foreach ($candidatePath in @($firstPath, $secondPath)) {
+        foreach ($candidatePath in @($firstPath, $secondPath, $thirdPath, $fourthPath)) {
             if ($candidatePath -and $candidatePath -ne $returnPath -and (Test-Path -LiteralPath $candidatePath -PathType Leaf)) {
                 Remove-Item -LiteralPath $candidatePath -Force -ErrorAction SilentlyContinue
             }
@@ -1354,6 +1474,39 @@ function Get-ValidatedCachedCloudCandidate {
         if (Test-Path -LiteralPath $temporaryPath -PathType Leaf) { Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue }
         throw
     }
+}
+
+function Get-PreviousCloudIdentitySet {
+    param([string]$Url)
+    $identitySet = @{}
+    $metadata = Read-CloudSyncMetadata
+    if ($null -ne $metadata -and [string]$metadata.url -eq $Url.Trim()) {
+        foreach ($identity in @($metadata.cloudIdentities)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$identity)) { $identitySet[[string]$identity] = $true }
+        }
+    }
+
+    # 元数据可能来自旧版本或被意外删改；同时从最后成功的云端快照恢复所有权，
+    # 确保云端 ID 改名后旧规则一定会被删除，而本地私有规则仍然保留。
+    $snapshot = Get-CloudSnapshotPath
+    if (Test-Path -LiteralPath $snapshot -PathType Leaf) {
+        $temporaryPath = Join-Path ([System.IO.Path]::GetTempPath()) ('CheckSentry-cloud-owner-' + [guid]::NewGuid().ToString('N') + '.xlsx')
+        try {
+            Copy-Item -LiteralPath $snapshot -Destination $temporaryPath -ErrorAction Stop
+            $previousRules = Import-CloudRuleSheets -Path $temporaryPath
+            foreach ($sheetName in $script:AllowedSheets) {
+                foreach ($rule in @($previousRules.$sheetName)) {
+                    $identity = Get-RuleIdentity -ItemType ([string]$rule.'类型') -ExtensionId ([string]$rule.'插件ID') -NamePattern ([string]$rule.'软件名关键词') -Publisher ([string]$rule.'发布者') -Version ([string]$rule.'版本号')
+                    if (-not [string]::IsNullOrWhiteSpace($identity)) { $identitySet[$identity] = $true }
+                }
+            }
+        } catch {
+            Write-Verbose "读取上次云端快照的规则身份失败，将使用同步元数据：$($_.Exception.Message)"
+        } finally {
+            if (Test-Path -LiteralPath $temporaryPath -PathType Leaf) { Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue }
+        }
+    }
+    return $identitySet
 }
 
 function Test-CloudRulesApplied {
@@ -1381,7 +1534,8 @@ function Test-CloudRulesApplied {
 }
 
 function Set-CloudSyncRuntimeState {
-    param([bool]$Configured, [string]$Status, [bool]$UsingCache, [string]$Message, $Stats, [string]$RuleHash, [string]$SyncedAt)
+    param([bool]$Configured, [string]$Status, [bool]$UsingCache, [string]$Message, $Stats, [string]$RuleHash, [string]$SyncedAt, $ValidationWarnings = @())
+    $warnings = @($ValidationWarnings)
     $script:CloudSyncState = [PSCustomObject]@{
         Configured = $Configured
         Status = $Status
@@ -1392,6 +1546,8 @@ function Set-CloudSyncRuntimeState {
         PendingCount = if ($null -eq $Stats) { 0 } else { [int]$Stats.PendingCount }
         BlackCount = if ($null -eq $Stats) { 0 } else { [int]$Stats.BlackCount }
         RuleHash = $RuleHash
+        WarningCount = $warnings.Count
+        ValidationWarnings = $warnings
     }
 }
 
@@ -1407,7 +1563,7 @@ function Sync-CloudWorkbook {
     $remoteError = ''
     try {
         try {
-            $candidate = Get-ValidatedRemoteCloudCandidate -Url $effectiveUrl
+            $candidate = Get-ValidatedRemoteCloudCandidate -Url $effectiveUrl -ForceConfirmation:$RequireRemote.IsPresent
         } catch {
             $remoteError = $_.Exception.Message
             if ($RequireRemote) { throw }
@@ -1419,7 +1575,6 @@ function Sync-CloudWorkbook {
         }
         $cloudRules = $candidate.Rules
         $localRules = Import-AllRuleSheets -Path $Path
-        $previousMetadata = Read-CloudSyncMetadata
         $cloudEntries = @()
         $identitySet = @{}
         foreach ($sheetName in $script:AllowedSheets) {
@@ -1443,23 +1598,17 @@ function Sync-CloudWorkbook {
                 $cloudEntries += [PSCustomObject]@{ Sheet = $sheetName; Rule = $effectiveRule; Identity = $identity }
             }
         }
-        $removalIdentitySet = @{}
+        $removalIdentitySet = Get-PreviousCloudIdentitySet -Url $effectiveUrl
         foreach ($identity in @($identitySet.Keys)) { $removalIdentitySet[[string]$identity] = $true }
-        if ($null -ne $previousMetadata -and
-            [string]$previousMetadata.url -eq $effectiveUrl.Trim() -and
-            $null -ne $previousMetadata.cloudIdentities) {
-            foreach ($identity in @($previousMetadata.cloudIdentities)) {
-                if (-not [string]::IsNullOrWhiteSpace([string]$identity)) {
-                    $removalIdentitySet[[string]$identity] = $true
-                }
-            }
-        }
         $hasRetiredCloudIdentity = $false
         foreach ($identity in @($removalIdentitySet.Keys)) {
             if (-not $identitySet.ContainsKey([string]$identity)) { $hasRetiredCloudIdentity = $true; break }
         }
         $changed = -not (Test-CloudRulesApplied -CloudEntries $cloudEntries -LocalRules $localRules)
         if (-not $changed -and $hasRetiredCloudIdentity) { $changed = $true }
+        # 用户主动同步采用“云端规则子集全量重建”：删除上次快照所属规则后重新写入，
+        # 不依赖增量判断；本地私有规则因不属于云端身份集合而保留。
+        if ($RequireRemote.IsPresent) { $changed = $true }
         if ($changed) {
             $operation = {
                 param($package)
@@ -1476,6 +1625,14 @@ function Sync-CloudWorkbook {
         $verifiedRules = Import-AllRuleSheets -Path $Path
         if (-not (Test-CloudRulesApplied -CloudEntries $cloudEntries -LocalRules $verifiedRules)) {
             throw '云端规则写入后复核失败，本地清单与已验证云端规则不一致。'
+        }
+        foreach ($sheetName in $script:AllowedSheets) {
+            foreach ($verifiedRule in @($verifiedRules.$sheetName)) {
+                $verifiedIdentity = Get-RuleIdentity -ItemType ([string]$verifiedRule.'类型') -ExtensionId ([string]$verifiedRule.'插件ID') -NamePattern ([string]$verifiedRule.'软件名关键词') -Publisher ([string]$verifiedRule.'发布者') -Version ([string]$verifiedRule.'版本号')
+                if ($removalIdentitySet.ContainsKey($verifiedIdentity) -and -not $identitySet.ContainsKey($verifiedIdentity)) {
+                    throw "云端旧规则清理复核失败，旧身份仍存在：$verifiedIdentity"
+                }
+            }
         }
 
         $usingCache = $candidate.Source -eq 'cache'
@@ -1496,9 +1653,16 @@ function Sync-CloudWorkbook {
             $metadata = Read-CloudSyncMetadata
             if ($null -ne $metadata -and -not [string]::IsNullOrWhiteSpace([string]$metadata.syncedAt)) { $syncedAt = [string]$metadata.syncedAt }
         }
-        $message = if ($usingCache) { '云端暂时不可用，正在使用上次完整验证的规则。远程错误：' + $remoteError } else { '云端规则已完整验证。' }
-        $runtimeStatus = if ($usingCache) { '缓存' } else { '已验证' }
-        Set-CloudSyncRuntimeState -Configured $true -Status $runtimeStatus -UsingCache $usingCache -Message $message -Stats $candidate.Stats -RuleHash $candidate.RuleHash -SyncedAt $syncedAt
+        $warningCount = @($candidate.ValidationWarnings).Count
+        $message = if ($usingCache) {
+            '云端暂时不可用，正在使用上次完整验证的规则。远程错误：' + $remoteError
+        } elseif ($warningCount -gt 0) {
+            "云端规则已同步；跳过 $warningCount 条无效规则，请查看页面中的校验提示。"
+        } else {
+            '云端规则已完整验证。'
+        }
+        $runtimeStatus = if ($usingCache) { '缓存' } elseif ($warningCount -gt 0) { '有警告' } else { '已验证' }
+        Set-CloudSyncRuntimeState -Configured $true -Status $runtimeStatus -UsingCache $usingCache -Message $message -Stats $candidate.Stats -RuleHash $candidate.RuleHash -SyncedAt $syncedAt -ValidationWarnings $candidate.ValidationWarnings
         return [PSCustomObject]@{
             Configured = $true
             Changed = $changed
@@ -1510,6 +1674,8 @@ function Sync-CloudWorkbook {
             PendingCount = $candidate.Stats.PendingCount
             BlackCount = $candidate.Stats.BlackCount
             RuleHash = $candidate.RuleHash
+            WarningCount = $warningCount
+            ValidationWarnings = @($candidate.ValidationWarnings)
         }
     } catch {
         Set-CloudSyncRuntimeState -Configured $true -Status '失败' -UsingCache $false -Message $_.Exception.Message -Stats $null -RuleHash '' -SyncedAt ''
@@ -1535,7 +1701,7 @@ function Get-RuleMetadataByIdFromPackage {
         if ([string]($worksheet.Cells[$row, $idColumn].Value) -eq $RuleId) {
             return [PSCustomObject]@{
                 添加人 = [string]($worksheet.Cells[$row, $addedByColumn].Value)
-                添加时间 = [string]($worksheet.Cells[$row, $addedTimeColumn].Value)
+                添加时间 = ConvertTo-CanonicalAddedTime ($worksheet.Cells[$row, $addedTimeColumn].Value)
             }
         }
     }
@@ -1594,12 +1760,13 @@ function Convert-InputToRule {
     if ($script:AllowedItemTypes -notcontains $itemType) { throw "不允许的类型：$itemType" }
     $matchType = (Get-LimitedText -Value $Data.matchType -FieldName '匹配方式' -MaximumLength 32 -Required).Trim()
     if ($script:AllowedMatchTypes -notcontains $matchType) { throw "不允许的匹配方式：$matchType" }
-    $extensionId = ConvertTo-CanonicalExtensionId -Value (Get-LimitedText -Value $Data.extId -FieldName '插件ID' -MaximumLength 256) -ItemType $itemType
+    $extensionIds = @(Get-CanonicalExtensionIds -Value (Get-LimitedText -Value $Data.extId -FieldName '插件ID' -MaximumLength 2048) -ItemType $itemType)
+    $extensionId = $extensionIds -join ', '
     $namePattern = Get-LimitedText -Value $Data.namePattern -FieldName '软件名关键词' -MaximumLength 512 -Required
     if ($itemType -eq '软件' -and $matchType -eq '插件ID精确') { throw '软件规则不能使用插件ID精确。' }
     if ($matchType -eq '插件ID精确' -and [string]::IsNullOrWhiteSpace($extensionId)) { throw '插件ID精确规则必须填写插件ID。' }
-    if ($itemType -eq 'Chromium插件' -and $matchType -eq '插件ID精确' -and $extensionId -notmatch '^[a-p]{32}$') {
-        throw 'Chromium 插件ID必须是 32 位 a-p 字符，或完整的 chrome-extension:// 地址。'
+    if ($itemType -eq 'Chromium插件' -and $matchType -eq '插件ID精确' -and @($extensionIds | Where-Object { $_ -notmatch '^[a-p]{32}$' }).Count -gt 0) {
+        throw 'Chromium 插件ID必须是 32 位 a-p 字符；多个可信 ID 可用逗号、分号或换行分隔。'
     }
     if ($matchType -eq '正则') {
         try {
@@ -1666,7 +1833,8 @@ function Get-RuleIdentity {
         $versionKey = $versionParts -join ','
         return (ConvertTo-Json -InputObject @('软件', $nameKey, $publisherKey, $versionKey) -Compress)
     }
-    return ($ItemType + '|' + (ConvertTo-CanonicalExtensionId -Value $ExtensionId -ItemType $ItemType))
+    $extensionIds = @(Get-CanonicalExtensionIds -Value $ExtensionId -ItemType $ItemType | Sort-Object -Unique)
+    return ($ItemType + '|' + ($extensionIds -join ','))
 }
 
 function Get-WorksheetRowIdentity {
@@ -1739,6 +1907,7 @@ function Add-RuleToPackageWithState {
             else {
             $property = $Rule.PSObject.Properties[$header]
             $value = if ($null -ne $property -and $null -ne $property.Value) { [string]$property.Value } else { '' }
+            if ($header -eq '添加时间') { $value = ConvertTo-CanonicalAddedTime $value }
             $State.Worksheet.Cells[$State.NextRow, $column].Value = $value
             if ($header -eq '备注/原因') {
                 $noteLink = Get-SafeHttpUrl -Value $Rule.'备注/原因链接'
@@ -1802,6 +1971,7 @@ function ConvertTo-MatchComparableText {
     $text = [string]$Value
     if ([string]::IsNullOrWhiteSpace($text)) { return '' }
     $normalized = $text.Normalize([System.Text.NormalizationForm]::FormKC)
+    $normalized = [regex]::Replace($normalized, '[\p{Cc}\p{Cf}\uFFFD]+', '')
     return [regex]::Replace($normalized, '\s+', ' ').Trim()
 }
 
@@ -1817,6 +1987,16 @@ function ConvertTo-CanonicalExtensionId {
         $text = $matches[1]
     }
     return $text.ToLowerInvariant()
+}
+
+function Get-CanonicalExtensionIds {
+    param([object]$Value, [string]$ItemType = '')
+    $results = @()
+    foreach ($part in [regex]::Split([string]$Value, '[,，;；\r\n]+')) {
+        $canonical = ConvertTo-CanonicalExtensionId -Value $part -ItemType $ItemType
+        if (-not [string]::IsNullOrWhiteSpace($canonical) -and $results -notcontains $canonical) { $results += $canonical }
+    }
+    return @($results)
 }
 
 function Get-RuleVersionPatterns {
@@ -1883,9 +2063,9 @@ function Test-NameMatch {
     if ($Rule.'匹配方式' -eq '插件ID精确') {
         $ruleType = [string]$Rule.'类型'
         $installedId = ConvertTo-CanonicalExtensionId -Value $InstalledName -ItemType $ruleType
-        $ruleId = ConvertTo-CanonicalExtensionId -Value $Rule.'插件ID' -ItemType $ruleType
-        if ([string]::IsNullOrWhiteSpace($ruleId)) { return $false }
-        return [string]::Equals($installedId, $ruleId, [System.StringComparison]::Ordinal)
+        $ruleIds = @(Get-CanonicalExtensionIds -Value $Rule.'插件ID' -ItemType $ruleType)
+        if ($ruleIds.Count -eq 0) { return $false }
+        return $ruleIds -contains $installedId
     }
     $effectiveRule = Get-EffectiveRuleMatchFields -Rule $Rule
     $pattern = [string]$effectiveRule.NamePattern
@@ -1938,10 +2118,10 @@ function New-RuleMatcher {
         $effectiveRule = Get-EffectiveRuleMatchFields -Rule $rule
         $matchType = [string]$effectiveRule.MatchType
         if ($matchType -eq '插件ID精确') {
-            $key = ConvertTo-CanonicalExtensionId -Value $rule.'插件ID' -ItemType $ruleType
-            if ([string]::IsNullOrWhiteSpace($key)) { continue }
-            if (-not $extensionIds.ContainsKey($key)) { $extensionIds[$key] = @() }
-            $extensionIds[$key] = @($extensionIds[$key]) + $entry
+            foreach ($key in @(Get-CanonicalExtensionIds -Value $rule.'插件ID' -ItemType $ruleType)) {
+                if (-not $extensionIds.ContainsKey($key)) { $extensionIds[$key] = @() }
+                $extensionIds[$key] = @($extensionIds[$key]) + $entry
+            }
         } elseif ($matchType -eq '精确' -and -not $effectiveRule.EmbeddedVersion) {
             $key = ConvertTo-MatchComparableText $effectiveRule.NamePattern
             if (-not $exactNames.ContainsKey($key)) { $exactNames[$key] = @() }
@@ -1985,9 +2165,9 @@ function Find-BlacklistedPluginNameCollision {
     foreach ($rule in @($Rules)) {
         $ruleType = if ([string]::IsNullOrWhiteSpace([string]$rule.'类型')) { '软件' } else { [string]$rule.'类型' }
         if ($ruleType -ne $ItemType -or [string]$rule.'匹配方式' -ne '插件ID精确') { continue }
-        $ruleExtensionId = ConvertTo-CanonicalExtensionId -Value $rule.'插件ID' -ItemType $ruleType
+        $ruleExtensionIds = @(Get-CanonicalExtensionIds -Value $rule.'插件ID' -ItemType $ruleType)
         $installedExtensionId = ConvertTo-CanonicalExtensionId -Value $ExtensionId -ItemType $ItemType
-        if ([string]::Equals($ruleExtensionId, $installedExtensionId, [System.StringComparison]::Ordinal)) { continue }
+        if ($ruleExtensionIds -contains $installedExtensionId) { continue }
         $ruleName = ConvertTo-MatchComparableText ([string]$rule.'软件名关键词')
         if ([string]::IsNullOrWhiteSpace($ruleName)) { continue }
         if ([string]::Equals($ruleName, $installedName, [System.StringComparison]::OrdinalIgnoreCase)) { return $rule }
@@ -2000,19 +2180,31 @@ function Find-WhitelistedPluginNameCollision {
     if ($ItemType -eq '软件' -or [string]::IsNullOrWhiteSpace($DisplayName)) { return $null }
     $installedName = ConvertTo-MatchComparableText $DisplayName
     $installedExtensionId = ConvertTo-CanonicalExtensionId -Value $ExtensionId -ItemType $ItemType
+    $matches = @()
     foreach ($rule in @($Rules)) {
         $ruleType = if ([string]::IsNullOrWhiteSpace([string]$rule.'类型')) { '软件' } else { [string]$rule.'类型' }
         if ($ruleType -ne $ItemType -or [string]$rule.'匹配方式' -ne '插件ID精确') { continue }
         $ruleName = ConvertTo-MatchComparableText ([string]$rule.'软件名关键词')
         if (-not [string]::Equals($ruleName, $installedName, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
-        $ruleExtensionId = ConvertTo-CanonicalExtensionId -Value $rule.'插件ID' -ItemType $ruleType
-        if (-not [string]::Equals($ruleExtensionId, $installedExtensionId, [System.StringComparison]::Ordinal)) { return $rule }
+        $ruleExtensionIds = @(Get-CanonicalExtensionIds -Value $rule.'插件ID' -ItemType $ruleType)
+        if ($ruleExtensionIds -notcontains $installedExtensionId) { $matches += $rule }
     }
-    return $null
+    return @($matches)
 }
 
 function New-ComplianceItem {
-    param($Source, [string]$ItemType, [string]$Status, [string]$Reason, $MatchedRule, [string]$MatchedSheet)
+    param(
+        $Source,
+        [string]$ItemType,
+        [string]$Status,
+        [string]$Reason,
+        $MatchedRule,
+        [string]$MatchedSheet,
+        [string]$PendingKind = '',
+        [string[]]$RuleExtensionIds = @(),
+        [string]$CurrentExtensionId = '',
+        [bool]$DeveloperLoaded = $false
+    )
     $isSoftware = $ItemType -eq '软件'
     $iconPath = if ($isSoftware) { [string]$Source.图标路径 } else { [string]$Source.IconPath }
     $iconIndex = if ($isSoftware) { [int]$Source.图标索引 } else { 0 }
@@ -2054,6 +2246,10 @@ function New-ComplianceItem {
         MatchedSheet = $MatchedSheet
         MatchedRule = $MatchedRule
         MatchedRuleId = if ($null -ne $MatchedRule) { $MatchedRule.id } else { $null }
+        PendingKind = $PendingKind
+        RuleExtensionIds = @($RuleExtensionIds)
+        CurrentExtensionId = $CurrentExtensionId
+        DeveloperLoaded = $DeveloperLoaded
     }
 }
 
@@ -2121,14 +2317,15 @@ function Get-ComplianceResult {
                 $results += New-ComplianceItem -Source $item -ItemType $ItemType -Status '待定' -Reason $reason -MatchedRule $null -MatchedSheet ''
                 continue
             }
-            $whiteNameCollision = Find-WhitelistedPluginNameCollision -Rules $WhiteRules -ItemType $ItemType -DisplayName $displayName -ExtensionId $extensionId
-            if ($null -ne $whiteNameCollision) {
-                $whiteId = ConvertTo-CanonicalExtensionId -Value $whiteNameCollision.'插件ID' -ItemType $ItemType
+            $whiteNameCollisions = @(Find-WhitelistedPluginNameCollision -Rules $WhiteRules -ItemType $ItemType -DisplayName $displayName -ExtensionId $extensionId)
+            if ($whiteNameCollisions.Count -gt 0) {
+                $whiteIds = @($whiteNameCollisions | ForEach-Object { Get-CanonicalExtensionIds -Value $_.'插件ID' -ItemType $ItemType } | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Sort-Object -Unique)
+                $whiteId = $whiteIds -join ', '
                 $currentId = ConvertTo-CanonicalExtensionId -Value $extensionId -ItemType $ItemType
                 $isDeveloperLoaded = @($item.InstallLocations | Where-Object { $_ -in @(4, 8) }).Count -gt 0
-                $developerHint = if ($isDeveloperLoaded) { ' 此插件由开发者模式加载；manifest.json 未固定 key 时，插件 ID 可能随安装路径变化。' } else { '' }
+                $developerHint = if ($isDeveloperLoaded) { ' 开发者插件ID可能随路径变化。' } else { '' }
                 $reason = "名称与白名单插件相同，但插件 ID 不同，不能自动放行。白名单 ID：$whiteId；当前 ID：$currentId。$developerHint"
-                $results += New-ComplianceItem -Source $item -ItemType $ItemType -Status '待定' -Reason $reason -MatchedRule $null -MatchedSheet ''
+                $results += New-ComplianceItem -Source $item -ItemType $ItemType -Status '待定' -Reason $reason -MatchedRule $null -MatchedSheet '' -PendingKind 'PluginWhitelistIdMismatch' -RuleExtensionIds $whiteIds -CurrentExtensionId $currentId -DeveloperLoaded $isDeveloperLoaded
                 continue
             }
         }
@@ -2479,8 +2676,8 @@ function Get-RuleIconKey {
             return [string]$reportRecord.IconKey
         }
         $reportExtensionId = ConvertTo-CanonicalExtensionId -Value $reportRecord.ExtensionId -ItemType $itemType
-        $ruleExtensionId = ConvertTo-CanonicalExtensionId -Value $Rule.'插件ID' -ItemType $itemType
-        if ([string]::Equals($reportExtensionId, $ruleExtensionId, [System.StringComparison]::Ordinal)) {
+        $ruleExtensionIds = @(Get-CanonicalExtensionIds -Value $Rule.'插件ID' -ItemType $itemType)
+        if ($ruleExtensionIds -contains $reportExtensionId) {
             return [string]$reportRecord.IconKey
         }
     }
@@ -2571,13 +2768,36 @@ function Get-DefaultRuleFields {
     }
 }
 
+function Get-CompactExtensionId {
+    param([string]$Value)
+    $id = ([string]$Value).Trim()
+    if ($id.Length -le 18) { return $id }
+    return $id.Substring(0, 8) + '…' + $id.Substring($id.Length - 5)
+}
+
 function Get-RowHtml {
     param($Item, [bool]$NeedsAction)
     $name = ConvertTo-HtmlEncodedText $Item.名称
     $version = ConvertTo-HtmlEncodedText $Item.版本
     $publisherText = ConvertTo-HtmlEncodedText $Item.发布者
     $publisher = if ([string]::IsNullOrWhiteSpace($publisherText)) { '' } else { "<div class='tooltip-wrapper'><div class='truncate-hover'>$publisherText</div><div class='copyable-tooltip'>$publisherText</div></div>" }
-        $reason = Get-UserNoteText $Item.原因
+    $reason = Get-UserNoteText $Item.原因
+    $isWhitelistIdMismatch = [string]$Item.PendingKind -eq 'PluginWhitelistIdMismatch'
+    $idMismatchTooltip = ''
+    $idMismatchCompact = ''
+    if ($isWhitelistIdMismatch) {
+        $ruleIds = @($Item.RuleExtensionIds | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Unique)
+        $currentExtensionId = [string]$Item.CurrentExtensionId
+        $compactRule = if ($ruleIds.Count -le 1) {
+            Get-CompactExtensionId $ruleIds[0]
+        } else {
+            (Get-CompactExtensionId $ruleIds[0]) + "(+$($ruleIds.Count - 1))"
+        }
+        $idMismatchCompact = ConvertTo-HtmlEncodedText ("规则 {0}｜当前 {1}" -f $compactRule, (Get-CompactExtensionId $currentExtensionId))
+        $encodedRuleIds = @($ruleIds | ForEach-Object { ConvertTo-HtmlEncodedText $_ })
+        $idMismatchTooltip = "规则ID：$($encodedRuleIds -join '<br>')<br>当前ID：$(ConvertTo-HtmlEncodedText $currentExtensionId)"
+        if ([bool]$Item.DeveloperLoaded) { $idMismatchTooltip += '<br>开发者插件ID可能随路径变化' }
+    }
     $status = ConvertTo-HtmlEncodedText $Item.状态
     $matchedRule = $Item.MatchedRule
     $defaultRule = Get-DefaultRuleFields -Item $Item
@@ -2594,6 +2814,9 @@ function Get-RowHtml {
         if (-not [string]::IsNullOrWhiteSpace($ruleVersion)) {
             $statusDisplay = "<div class='tooltip-wrapper'><div class='status-compact'>规则 $ruleVersion</div><div class='copyable-tooltip status-tooltip'>状态：版本变化<br>规则版本：$ruleVersion<br>当前版本：$version</div></div>"
         }
+    } elseif ([string]$Item.状态 -eq '待定' -and ($isWhitelistIdMismatch -or ([string]$reason -match '插件 ID 不同'))) {
+        $idDifferenceDetail = if ($isWhitelistIdMismatch) { $idMismatchTooltip } else { ConvertTo-HtmlEncodedText $reason }
+        $statusDisplay = "<div class='tooltip-wrapper'><div class='status-compact'>ID不一致</div><div class='copyable-tooltip status-tooltip'>状态：待定<br>$idDifferenceDetail</div></div>"
     }
 
     $typeIcon = if ($Item.类型 -eq '软件') { '&#128187;' } elseif ($Item.类型 -eq 'Chromium插件') { '&#127760;' } else { '&#129418;' }
@@ -2655,7 +2878,13 @@ function Get-RowHtml {
     }
     $checkbox = if ($NeedsAction) { "<input type='checkbox' class='row-chk'>" } else { '' }
     $reasonHtml = ConvertTo-SafeNoteHtml -Text $reason -Link $Item.'备注/原因链接'
-    $reasonWrapper = if ([string]::IsNullOrWhiteSpace($reason)) { "<div class='tooltip-wrapper'><div class='truncate-hover'>-</div><div class='copyable-tooltip reason-tooltip'>-</div></div>" } else { "<div class='tooltip-wrapper'><div class='truncate-hover'>$reasonHtml</div><div class='copyable-tooltip reason-tooltip'>$reasonHtml</div></div>" }
+    $reasonWrapper = if ($isWhitelistIdMismatch) {
+        "<div class='tooltip-wrapper'><div class='truncate-hover id-mismatch-summary'>$idMismatchCompact</div><div class='copyable-tooltip reason-tooltip id-mismatch-tooltip'>$idMismatchTooltip</div></div>"
+    } elseif ([string]::IsNullOrWhiteSpace($reason)) {
+        "<div class='tooltip-wrapper'><div class='truncate-hover'>-</div><div class='copyable-tooltip reason-tooltip'>-</div></div>"
+    } else {
+        "<div class='tooltip-wrapper'><div class='truncate-hover'>$reasonHtml</div><div class='copyable-tooltip reason-tooltip'>$reasonHtml</div></div>"
+    }
     return @"
     <tr class="$rowClass"><td class="chk-cell">$checkbox</td><td class="item-cell"><div class="item-cell-wrapper">$iconHtml<div class="item-main"><div class="item-title"><div class="tooltip-wrapper"><div class="item-name">$name</div><div class="copyable-tooltip">$name</div></div></div>$locationHtml</div></div></td><td>$version</td><td>$publisher</td><td>$statusDisplay</td><td class="reason">$reasonWrapper</td><td>$actionHtml</td></tr>
 "@
@@ -2665,7 +2894,9 @@ function Build-ReportHtml {
     param($Results, [string]$Path, [string]$CsrfToken, [string]$Nonce)
     $red = @($Results | Where-Object { $_.状态 -eq '命中黑名单' })
     $yellow = @($Results | Where-Object { $_.状态 -eq '版本变化' })
-    $pending = @($Results | Where-Object { $_.状态 -eq '待定' })
+    $pendingAll = @($Results | Where-Object { $_.状态 -eq '待定' })
+    $pendingIdMismatches = @($pendingAll | Where-Object { [string]$_.PendingKind -eq 'PluginWhitelistIdMismatch' -or [string]$_.原因 -match '插件 ID 不同' })
+    $pending = @($pendingIdMismatches) + @($pendingAll | Where-Object { -not ([string]$_.PendingKind -eq 'PluginWhitelistIdMismatch' -or [string]$_.原因 -match '插件 ID 不同') })
     $green = @($Results | Where-Object { $_.状态 -eq '已匹配' })
     $redSoftware = @($red | Where-Object { $_.类型 -eq '软件' })
     $redPlugins = @($red | Where-Object { $_.类型 -ne '软件' })
@@ -2687,9 +2918,21 @@ function Build-ReportHtml {
     $greenRows = ($green | ForEach-Object { Get-RowHtml -Item $_ -NeedsAction $true }) -join "`n"
     $body += "<div class='section-container'><details class='green-section'><summary><h2 class='sec-green'>&#128994; 已匹配（点击展开，共 $($green.Count) 项）</h2><label class='section-select green-select'><input type='checkbox' class='section-chk'> 全选本区</label></summary>$tableHead$greenRows$tableTail</details></div>"
     $cloudState = $script:CloudSyncState
+    $cloudWarningHtml = ''
+    $cloudWarnings = @($cloudState.ValidationWarnings)
+    if ($cloudWarnings.Count -gt 0) {
+        $warningRows = @($cloudWarnings | Select-Object -First 100 | ForEach-Object {
+            $location = "$(ConvertTo-HtmlEncodedText $_.Sheet)！$(ConvertTo-HtmlEncodedText $_.Cell)"
+            $message = ConvertTo-HtmlEncodedText $_.Message
+            $preview = ConvertTo-HtmlEncodedText $_.Preview
+            "<tr><td>$location</td><td>$message</td><td>$preview</td></tr>"
+        }) -join ''
+        $moreText = if ($cloudWarnings.Count -gt 100) { "<div class='cloud-warning-more'>另有 $($cloudWarnings.Count - 100) 条，请修正规则后重新同步。</div>" } else { '' }
+        $cloudWarningHtml = "<details class='cloud-validation-warning' open><summary>云端规则校验提示：已跳过 $($cloudWarnings.Count) 条无效规则（不会阻止软件使用）</summary><table><thead><tr><th>位置</th><th>问题</th><th>当前值</th></tr></thead><tbody>$warningRows</tbody></table>$moreText</details>"
+    }
     if ($cloudState.Configured) {
-        $cloudColor = if ($cloudState.UsingCache) { '#8a5a00' } elseif ($cloudState.Status -eq '失败') { '#c0392b' } else { '#276749' }
-        $cloudLabel = if ($cloudState.UsingCache) { '云端：缓存规则' } elseif ($cloudState.Status -eq '失败') { '云端：同步失败' } else { '云端：已验证' }
+        $cloudColor = if ($cloudState.UsingCache) { '#8a5a00' } elseif ($cloudState.Status -eq '失败') { '#c0392b' } elseif ($cloudState.Status -eq '有警告') { '#9c6500' } else { '#276749' }
+        $cloudLabel = if ($cloudState.UsingCache) { '云端：缓存规则' } elseif ($cloudState.Status -eq '失败') { '云端：同步失败' } elseif ($cloudState.Status -eq '有警告') { "云端：有警告 $($cloudState.WarningCount)" } else { '云端：已验证' }
         $shortHash = if ([string]::IsNullOrWhiteSpace([string]$cloudState.RuleHash)) { '-' } else { ([string]$cloudState.RuleHash).Substring(0, [Math]::Min(8, ([string]$cloudState.RuleHash).Length)) }
         $cloudTitle = ConvertTo-HtmlEncodedText ([string]$cloudState.Message)
         $cloudStatusHtml = "<span class='tag' style='color:$cloudColor' title='$cloudTitle'>$cloudLabel｜白 $($cloudState.WhiteCount)｜待 $($cloudState.PendingCount)｜黑 $($cloudState.BlackCount)｜$shortHash</span>"
@@ -2698,7 +2941,7 @@ function Build-ReportHtml {
     }
     $summary = "<div class='summary'><span>核对时间：$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')</span><span class='tag tag-red'>黑名单：$($red.Count)</span><span class='tag tag-yellow'>版本变化：$($yellow.Count)</span><span class='tag tag-pending'>待定：$($pending.Count)</span><span class='tag tag-green'>已匹配：$($green.Count)</span>$cloudStatusHtml<span class='tag'>清单文件：$(ConvertTo-HtmlEncodedText $Path)</span><button type='button' id='openManagementButton'>清单维护</button><button type='button' id='cloudSettingsButton'>云端清单设置</button><button type='button' id='cloudSyncButton'>立即同步</button><button type='button' id='reloadButton'>重新扫描分类</button></div>"
     $template = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'report_template.html') -Raw -Encoding UTF8
-    return $template.Replace('__SUMMARY__', $summary).Replace('__BODY__', $body).Replace('__CSRF_TOKEN__', (ConvertTo-HtmlEncodedText $CsrfToken)).Replace('__CSP_NONCE__', (ConvertTo-HtmlEncodedText $Nonce))
+    return $template.Replace('__SUMMARY__', $summary).Replace('__BODY__', ($cloudWarningHtml + $body)).Replace('__CSRF_TOKEN__', (ConvertTo-HtmlEncodedText $CsrfToken)).Replace('__CSP_NONCE__', (ConvertTo-HtmlEncodedText $Nonce))
 }
 
 function New-RandomToken {
@@ -2975,10 +3218,11 @@ function Start-ReportServer {
                         $cloudUrl = Get-LimitedText -Value $data.url -FieldName 'Google Sheets 链接' -MaximumLength 2048 -Required
                         $syncResult = Sync-CloudWorkbook -Path $Path -Url $cloudUrl -RequireRemote -CreateUndo
                         $exportUrl = Write-CloudSettings -Url $cloudUrl
-                        Write-JsonResponse -Response $response -Object @{ ok = $true; url = $cloudUrl; exportUrl = $exportUrl; configured = $true; changed = $syncResult.Changed; count = $syncResult.Count; usingCache = $syncResult.UsingCache; message = $syncResult.Message; syncedAt = $syncResult.SyncedAt; whiteCount = $syncResult.WhiteCount; pendingCount = $syncResult.PendingCount; blackCount = $syncResult.BlackCount; ruleHash = $syncResult.RuleHash } -StatusCode 200 -Nonce $nonce
+                        Write-JsonResponse -Response $response -Object @{ ok = $true; url = $cloudUrl; exportUrl = $exportUrl; configured = $true; changed = $syncResult.Changed; count = $syncResult.Count; usingCache = $syncResult.UsingCache; message = $syncResult.Message; syncedAt = $syncResult.SyncedAt; whiteCount = $syncResult.WhiteCount; pendingCount = $syncResult.PendingCount; blackCount = $syncResult.BlackCount; ruleHash = $syncResult.RuleHash; warningCount = $syncResult.WarningCount; validationWarnings = $syncResult.ValidationWarnings } -StatusCode 200 -Nonce $nonce
                     } elseif ($route -eq '/api/manage/cloudSync') {
-                        $syncResult = Sync-CloudWorkbook -Path $Path -CreateUndo
-                        Write-JsonResponse -Response $response -Object @{ ok = $true; configured = $syncResult.Configured; changed = $syncResult.Changed; count = $syncResult.Count; usingCache = $syncResult.UsingCache; message = $syncResult.Message; syncedAt = $syncResult.SyncedAt; whiteCount = $syncResult.WhiteCount; pendingCount = $syncResult.PendingCount; blackCount = $syncResult.BlackCount; ruleHash = $syncResult.RuleHash; canUndo = ($null -ne $script:LastUndoSnapshot) } -StatusCode 200 -Nonce $nonce
+                        # 用户主动点击同步时必须读取并连续确认远端数据，不能静默退回旧缓存。
+                        $syncResult = Sync-CloudWorkbook -Path $Path -CreateUndo -RequireRemote
+                        Write-JsonResponse -Response $response -Object @{ ok = $true; configured = $syncResult.Configured; changed = $syncResult.Changed; count = $syncResult.Count; usingCache = $syncResult.UsingCache; message = $syncResult.Message; syncedAt = $syncResult.SyncedAt; whiteCount = $syncResult.WhiteCount; pendingCount = $syncResult.PendingCount; blackCount = $syncResult.BlackCount; ruleHash = $syncResult.RuleHash; warningCount = $syncResult.WarningCount; validationWarnings = $syncResult.ValidationWarnings; canUndo = ($null -ne $script:LastUndoSnapshot) } -StatusCode 200 -Nonce $nonce
                     } elseif ($route -eq '/api/manage/takeover') {
                         $settings = Read-TakeoverSettings
                         if ($null -eq $settings) { throw '尚未设置接管密码，请先点击“设置接管密码”。' }
@@ -3154,12 +3398,15 @@ try {
     }
     Ensure-WorkbookCompatibility -Path $ListPath
     Ensure-CanonicalWorkbookSchema -Path $ListPath
+    $repairedAddedTimes = Repair-WorkbookAddedTimes -Path $ListPath
+    if ($repairedAddedTimes -gt 0) { Write-Host "已统一本地清单添加时间格式：$repairedAddedTimes 条" -ForegroundColor Yellow }
     $clearedSystemNotes = Clear-SystemGeneratedRuleNotes -Path $ListPath
     if ($clearedSystemNotes -gt 0) { Write-Host "已清理系统生成的备注/原因：$clearedSystemNotes 条" -ForegroundColor Yellow }
     Assert-WorkbookPathSchema -Path $ListPath
     try {
         $cloudSyncResult = Sync-CloudWorkbook -Path $ListPath
         if ($cloudSyncResult.Configured -and $cloudSyncResult.UsingCache) { Write-Host $cloudSyncResult.Message -ForegroundColor Yellow }
+        elseif ($cloudSyncResult.Configured -and $cloudSyncResult.WarningCount -gt 0) { Write-Host $cloudSyncResult.Message -ForegroundColor Yellow }
         elseif ($cloudSyncResult.Configured -and $cloudSyncResult.Changed) { Write-Host "已从云端同步并验证规则：$($cloudSyncResult.Count) 条" -ForegroundColor Green }
         elseif ($cloudSyncResult.Configured) { Write-Host '云端规则已完整验证，本地清单无需更新。' -ForegroundColor DarkGray }
     } catch {

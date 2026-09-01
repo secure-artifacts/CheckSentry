@@ -6,6 +6,15 @@
 
 $script:StartMenuIconCatalogCache = $null
 
+function ConvertTo-CleanSoftwareText {
+    param([object]$Value)
+    $text = [string]$Value
+    if ([string]::IsNullOrWhiteSpace($text)) { return '' }
+    $text = $text.Normalize([System.Text.NormalizationForm]::FormKC)
+    $text = [regex]::Replace($text, '[\p{Cc}\p{Cf}\uFFFD]+', '')
+    return ([regex]::Replace($text, '\s+', ' ')).Trim()
+}
+
 function Expand-RegistryPathValue {
     param([object]$Value)
     if ($null -eq $Value) { return '' }
@@ -571,7 +580,7 @@ function Get-InstalledSoftwareList {
     }
 
     $result = foreach ($item in $raw) {
-        $displayName = ([string]$item.DisplayName).Trim()
+        $displayName = ConvertTo-CleanSoftwareText $item.DisplayName
         $installLocation = (Expand-RegistryPathValue -Value $item.InstallLocation).Trim().Trim('"')
         $iconReference = Resolve-DisplayIconReference -DisplayIcon $item.DisplayIcon
         if ($ResolveIcons -and $null -eq $iconReference) {
@@ -592,9 +601,9 @@ function Get-InstalledSoftwareList {
         }
         [PSCustomObject]@{
             名称       = $displayName
-            版本       = if ($null -ne $item.DisplayVersion) { ([string]$item.DisplayVersion).Trim() } else { '' }
-            发布者     = if ($null -ne $item.Publisher) { ([string]$item.Publisher).Trim() } else { '' }
-            安装日期   = if ($null -ne $item.InstallDate) { [string]$item.InstallDate } else { '' }
+            版本       = ConvertTo-CleanSoftwareText $item.DisplayVersion
+            发布者     = ConvertTo-CleanSoftwareText $item.Publisher
+            安装日期   = ConvertTo-CleanSoftwareText $item.InstallDate
             安装路径   = $installLocation
             卸载命令   = if ($null -ne $item.UninstallString) { [string]$item.UninstallString } else { '' }
             图标路径   = if ($null -ne $iconReference) { [string]$iconReference.Path } else { '' }

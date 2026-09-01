@@ -20,6 +20,8 @@ Assert-True (-not (Test-VersionMatch -InstalledVersion @('1.2.0','1.3.0') -RuleV
 Assert-True (Test-VersionMatch -InstalledVersion '6.45.2' -RuleVersion '[6.45.3, 6.45.2, 6.45.1]') '云端单元格中的版本列表必须按任一版本匹配。'
 Assert-True (-not (Test-VersionMatch -InstalledVersion '6.45.9' -RuleVersion '[6.45.3, 6.45.2, 6.45.1]')) '版本列表中不存在的版本不应匹配。'
 Assert-True ((Get-SafeChildPath -BasePath $root -RelativePath '..\outside.txt') -eq '') '安全路径函数必须拒绝目录穿越。'
+Assert-True ((ConvertTo-CanonicalAddedTime '46257.1465277778') -eq '2026-08-23 03:31') 'Excel 添加时间序列号必须转换为统一日期时间文本。'
+Assert-True ((ConvertTo-CanonicalAddedTime ([DateTime]'2026-08-23T03:31:00')) -eq '2026-08-23 03:31') '日期对象写入本地清单前必须转换为统一文本格式。'
 
 $extensionFixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('CheckSentry-extension-fixture-' + [guid]::NewGuid().ToString('N'))
 try {
@@ -62,6 +64,12 @@ $fullWidthRule = [PSCustomObject]@{ 类型='软件'; 匹配方式='精确'; 软�
 $fullWidthMatcher = New-RuleMatcher -Rules @($fullWidthRule) -ItemType '软件'
 Assert-True ($null -ne (Find-FirstMatchingRule -Rules $fullWidthMatcher -ItemType '软件' -DisplayName 'B&O Audio Control' -Publisher '' -ExtensionId '' -Version '1.47.308.0')) '全角与半角标点差异不应导致云端白名单匹配失败。'
 Assert-True ((Get-RuleIdentity -ItemType '软件' -ExtensionId '' -NamePattern 'B＆O Audio Control') -eq (Get-RuleIdentity -ItemType '软件' -ExtensionId '' -NamePattern 'B&O Audio Control')) '云端和本地规则身份也必须统一全角与半角字符。'
+$replacementPadding = -join @(1..6 | ForEach-Object { [char]0xFFFD })
+$monosnapRule = [PSCustomObject]@{ 类型='软件'; 匹配方式='精确'; 软件名关键词='Monosnap'; 插件ID=''; 版本号='5.3.0'; 发布者='Monosnap Inc.' }
+$monosnapInstalled = [PSCustomObject]@{ 名称=('Monosnap' + $replacementPadding); 版本=('5.3.0' + $replacementPadding); 发布者=('Monosnap Inc.' + $replacementPadding); 安装日期=''; 安装路径=''; 图标路径=''; 图标索引=0 }
+$monosnapResult = @(Get-ComplianceResult -Installed @($monosnapInstalled) -BlackRules @() -WhiteRules @($monosnapRule) -PendingRules @() -ItemType '软件')
+Assert-True ($monosnapResult.Count -eq 1 -and $monosnapResult[0].状态 -eq '已匹配') '注册表文本尾部含 Unicode 替换字符时，Monosnap 仍必须准确命中白名单。'
+Assert-True ((ConvertTo-CleanSoftwareText ('Monosnap' + $replacementPadding)) -eq 'Monosnap') '软件采集阶段必须清除 Unicode 替换字符。'
 $veracryptIdrixIdentity = Get-RuleIdentity -ItemType '软件' -ExtensionId '' -NamePattern 'VeraCrypt' -Publisher 'IDRIX' -Version '1.25.9'
 $veracryptAmCryptoIdentity = Get-RuleIdentity -ItemType '软件' -ExtensionId '' -NamePattern 'VeraCrypt' -Publisher 'AM Crypto' -Version '1.26.24'
 Assert-True ($veracryptIdrixIdentity -ne $veracryptAmCryptoIdentity) '同名软件的不同正版发布者和版本必须作为不同规则保留。'
@@ -107,9 +115,19 @@ $highlightInstalled = [PSCustomObject]@{ Name='高亮插件'; ExtensionId=$highl
 $highlightResult = @(Get-ComplianceResult -Installed @($highlightInstalled) -BlackRules @() -WhiteRules @($highlightRuleWithInvisibleText) -PendingRules @() -ItemType 'Chromium插件')
 Assert-True ($highlightResult.Count -eq 1 -and $highlightResult[0].状态 -eq '已匹配') '云端插件 ID 含零宽字符或不换行空格时，仍必须按同一 ID 命中白名单。'
 Assert-True ((ConvertTo-CanonicalExtensionId -Value ('chrome-extension://' + $highlightExtensionId + '/src/scopes/options/index.html') -ItemType 'Chromium插件') -eq $highlightExtensionId) '从地址栏复制的完整 chrome-extension:// 地址必须提取出准确插件 ID。'
+$highlightAliasRule = [PSCustomObject]@{ 类型='Chromium插件'; 匹配方式='插件ID精确'; 软件名关键词='高亮插件'; 插件ID=('ioldaogdolojkkfdmhkpnnnhnbklpobh, ' + $highlightExtensionId); 版本号='3.0.0'; 发布者='' }
+$highlightAliasResult = @(Get-ComplianceResult -Installed @($highlightInstalled) -BlackRules @() -WhiteRules @($highlightAliasRule) -PendingRules @() -ItemType 'Chromium插件')
+Assert-True ($highlightAliasResult.Count -eq 1 -and $highlightAliasResult[0].状态 -eq '已匹配') '同一插件规则配置多个可信 ID 时，任一准确 ID 都必须命中。'
+Assert-True ((Get-RuleIdentity -ItemType 'Chromium插件' -ExtensionId 'ibocimhdhiiccenajinccijhmgenlnlc,ioldaogdolojkkfdmhkpnnnhnbklpobh' -NamePattern '高亮插件') -eq (Get-RuleIdentity -ItemType 'Chromium插件' -ExtensionId 'ioldaogdolojkkfdmhkpnnnhnbklpobh;ibocimhdhiiccenajinccijhmgenlnlc' -NamePattern '高亮插件')) '可信插件 ID 别名顺序不应改变规则身份。'
 $differentDeveloperExtension = [PSCustomObject]@{ Name='高亮插件'; ExtensionId='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; Version='3.0.0'; Versions=@('3.0.0'); Publisher=''; Locations=@(); IconPath=''; Active=$true; InstallLocations=@(4) }
-$differentDeveloperResult = @(Get-ComplianceResult -Installed @($differentDeveloperExtension) -BlackRules @() -WhiteRules @($highlightRuleWithInvisibleText) -PendingRules @() -ItemType 'Chromium插件')
-Assert-True ($differentDeveloperResult.Count -eq 1 -and $differentDeveloperResult[0].状态 -eq '待定' -and $differentDeveloperResult[0].原因 -match '开发者模式.*ID 可能随安装路径变化') '开发者插件实际 ID 与白名单不同时必须保持待定并明确说明路径派生 ID 风险。'
+$secondHighlightRule = [PSCustomObject]@{ 类型='Chromium插件'; 匹配方式='插件ID精确'; 软件名关键词='高亮插件'; 插件ID='ioldaogdolojkkfdmhkpnnnhnbklpobh'; 版本号='3.0.0'; 发布者='' }
+$differentDeveloperResult = @(Get-ComplianceResult -Installed @($differentDeveloperExtension) -BlackRules @() -WhiteRules @($highlightRuleWithInvisibleText, $secondHighlightRule) -PendingRules @() -ItemType 'Chromium插件')
+Assert-True ($differentDeveloperResult.Count -eq 1 -and $differentDeveloperResult[0].状态 -eq '待定' -and $differentDeveloperResult[0].PendingKind -eq 'PluginWhitelistIdMismatch' -and $differentDeveloperResult[0].原因 -match '开发者插件ID可能随路径变化') '开发者插件实际 ID 与白名单不同时必须保持待定并使用简短路径派生 ID 提示。'
+Assert-True (@($differentDeveloperResult[0].RuleExtensionIds).Count -eq 2) '同名插件的全部白名单规则 ID 都必须进入差异提示。'
+$differentDeveloperHtml = Get-RowHtml -Item $differentDeveloperResult[0] -NeedsAction $true
+Assert-True ($differentDeveloperHtml -match 'ID不一致' -and $differentDeveloperHtml -match '规则ID：.*ibocimhdhiiccenajinccijhmgenlnlc' -and $differentDeveloperHtml -match 'ioldaogdolojkkfdmhkpnnnhnbklpobh' -and $differentDeveloperHtml -match '当前ID：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa') '待定区域必须醒目标记 ID 不一致，悬停展示全部规则 ID 和当前 ID。'
+$pendingOrderHtml = Build-ReportHtml -Results @($emptyRuleResult[0], $differentDeveloperResult[0]) -Path 'list.xlsx' -CsrfToken 'test' -Nonce 'test'
+Assert-True ($pendingOrderHtml.IndexOf('ID不一致') -lt $pendingOrderHtml.IndexOf('Unknown Tool')) '待定区域中同名但 ID 不一致的插件必须排在普通待定项上方。'
 
 Assert-XlsxArchiveComplete -Path (Join-Path $root 'list_template.xlsx')
 $cloudStats = Get-CloudRuleStats -AllRules ([PSCustomObject]@{ '白名单'=@(1,2); '待定'=@(3); '黑名单'=@(4,5,6) })
@@ -127,15 +145,55 @@ try {
         $whiteSheet.Cells[2, 4].Value = '精确'
         $whiteSheet.Cells[2, 5].Value = 'Length Test Tool'
         $whiteSheet.Cells[2, 6].Value = (('1' * 2049) -join '')
+        $whiteSheet.Cells[3, 2].Value = 'Chromium插件'
+        $whiteSheet.Cells[3, 3].Value = 'ibocimhdhiiccenajinccijhmgenlnl'
+        $whiteSheet.Cells[3, 4].Value = '插件ID精确'
+        $whiteSheet.Cells[3, 5].Value = 'Invalid ID Test'
+        $whiteSheet.Cells[4, 2].Value = '软件'
+        $whiteSheet.Cells[4, 4].Value = '精确'
+        $whiteSheet.Cells[4, 5].Value = 'Valid Cloud Tool'
         $fixturePackage.Save()
     } finally { $fixturePackage.Dispose() }
 
-    $cloudValidationError = ''
-    try { $null = Import-CloudRuleSheets -Path $cloudFixturePath } catch { $cloudValidationError = [string]$_.Exception.Message }
-    Assert-True ($cloudValidationError -match '白名单.*F2.*版本号.*2049') '云端规则校验错误必须指出具体工作表、单元格、字段和值长度。'
-    Assert-True ($cloudValidationError -notmatch '其他数据') '云端导入必须忽略待定、白名单、黑名单以外的工作表。'
+    $cloudImport = Import-CloudRuleSheets -Path $cloudFixturePath
+    $cloudWarnings = @($cloudImport.ValidationWarnings)
+    Assert-True (@($cloudImport.'白名单').Count -eq 1 -and [string]$cloudImport.'白名单'[0].'软件名关键词' -eq 'Valid Cloud Tool') '云端存在无效规则时必须跳过坏行并继续导入其他有效规则。'
+    Assert-True ($cloudWarnings.Count -eq 2) '云端版本字段和插件 ID 错误必须分别形成校验提示，不能阻断整个 UI。'
+    Assert-True (@($cloudWarnings | Where-Object { $_.Sheet -eq '白名单' -and $_.Cell -eq 'F2' -and $_.Message -match '版本号.*2049' }).Count -eq 1) '云端规则校验提示必须指出版本错误的工作表、单元格和字段。'
+    Assert-True (@($cloudWarnings | Where-Object { $_.Sheet -eq '白名单' -and $_.Cell -eq 'C3' -and $_.Message -match '32 位' }).Count -eq 1) '不足 32 位的 Chromium 插件 ID 必须在校验提示中指出准确单元格。'
+    Assert-True (@($cloudWarnings | Where-Object { $_.Message -match '其他数据' }).Count -eq 0) '云端导入必须忽略待定、白名单、黑名单以外的工作表。'
+    Set-CloudSyncRuntimeState -Configured $true -Status '有警告' -UsingCache $false -Message '测试警告' -Stats (Get-CloudRuleStats -AllRules $cloudImport) -RuleHash 'TEST' -SyncedAt '2026-01-01 00:00:00' -ValidationWarnings $cloudWarnings
+    $cloudWarningReport = Build-ReportHtml -Results @() -Path 'list.xlsx' -CsrfToken 'test' -Nonce 'test'
+    Assert-True ($cloudWarningReport -match '不会阻止软件使用' -and $cloudWarningReport -match '白名单！C3' -and $cloudWarningReport -match 'ibocimhdhiiccenajinccijhmgenlnl') '云端坏行必须在报告表格上方持续显示位置、原因和当前值。'
+    Set-CloudSyncRuntimeState -Configured $false -Status '未配置' -UsingCache $false -Message '' -Stats $null -RuleHash '' -SyncedAt ''
 } finally {
     if (Test-Path -LiteralPath $cloudFixturePath -PathType Leaf) { Remove-Item -LiteralPath $cloudFixturePath -Force }
+}
+
+Assert-True ((Get-RuleIdentity -ItemType 'Chromium插件' -ExtensionId 'ibocimhdhiiccenajinccijhmgenlnlc' -NamePattern '高亮插件') -ne (Get-RuleIdentity -ItemType 'Chromium插件' -ExtensionId 'ibocimhdhiiccenajinccijhmgenlnld' -NamePattern '高亮插件')) '云端插件 ID 修改一个字符后必须生成新身份，以便删除旧规则并写入新规则。'
+$ownerTestDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ('CheckSentry-cloud-owner-test-' + [guid]::NewGuid().ToString('N'))
+$originalDataDirectory = $script:DataDirectory
+try {
+    $ownerCacheDirectory = Join-Path $ownerTestDirectory 'CloudCache'
+    $null = New-Item -ItemType Directory -Path $ownerCacheDirectory -Force
+    $ownerSnapshot = Join-Path $ownerCacheDirectory 'last-good.xlsx'
+    Copy-Item -LiteralPath (Join-Path $root 'list_template.xlsx') -Destination $ownerSnapshot -ErrorAction Stop
+    $ownerPackage = Open-ExcelPackage -Path $ownerSnapshot -ErrorAction Stop
+    try {
+        $ownerRule = [PSCustomObject]@{ 类型='Chromium插件'; 插件ID='ibocimhdhiiccenajinccijhmgenlnlc'; 匹配方式='插件ID精确'; 软件名关键词='高亮插件'; 版本号='3.0.0'; 发布者=''; '状态/分类'='允许'; '备注/原因'=''; '备注/原因链接'=''; 添加人='test'; 添加时间='2026-01-01' }
+        $null = Add-RuleToPackage -Package $ownerPackage -SheetName '白名单' -Rule $ownerRule
+        Close-ExcelPackage -ExcelPackage $ownerPackage -ErrorAction Stop
+        $ownerPackage = $null
+    } finally {
+        if ($null -ne $ownerPackage) { $ownerPackage.Dispose() }
+    }
+    $script:DataDirectory = $ownerTestDirectory
+    $previousCloudIdentities = Get-PreviousCloudIdentitySet -Url 'https://docs.google.com/spreadsheets/d/aaaaaaaaaa/edit'
+    $oldCloudIdentity = Get-RuleIdentity -ItemType 'Chromium插件' -ExtensionId 'ibocimhdhiiccenajinccijhmgenlnlc' -NamePattern '高亮插件'
+    Assert-True ($previousCloudIdentities.ContainsKey($oldCloudIdentity)) '同步元数据缺失时也必须从上次云端快照恢复旧规则身份。'
+} finally {
+    $script:DataDirectory = $originalDataDirectory
+    if (Test-Path -LiteralPath $ownerTestDirectory -PathType Container) { Remove-Item -LiteralPath $ownerTestDirectory -Recurse -Force }
 }
 
 $rules = @(

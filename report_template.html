@@ -164,6 +164,14 @@
     z-index: 1000;
   }
   .toast.show { opacity: 1; }
+  .cloud-validation-warning { margin: 0 0 16px; border: 1px solid #e0a800; border-radius: 8px; background: #fff8db; color: #6b4f00; }
+  .cloud-validation-warning > summary { cursor: pointer; padding: 11px 14px; font-weight: 700; }
+  .cloud-validation-warning table { margin: 0; border: 0; border-top: 1px solid #e7ca64; background: #fffdf3; table-layout: fixed; }
+  .cloud-validation-warning th, .cloud-validation-warning td { height: auto; max-height: none; padding: 7px 10px; white-space: normal; overflow-wrap: anywhere; color: #5f4700; }
+  .cloud-validation-warning th:nth-child(1) { width: 14%; }
+  .cloud-validation-warning th:nth-child(2) { width: 48%; }
+  .cloud-validation-warning th:nth-child(3) { width: 38%; }
+  .cloud-warning-more { padding: 8px 12px; font-size: 12px; }
   .batch-actions {
     display: flex; gap: 10px; margin-bottom: 16px; align-items: center;
     background: #fff; border: 1px solid var(--border); border-radius: 8px;
@@ -197,6 +205,8 @@
   tr:nth-child(-n+2) .copyable-tooltip { bottom: auto; top: 100%; margin-bottom: 0; margin-top: 2px; }
   tr:nth-child(-n+2) .copyable-tooltip::before { top: -15px; bottom: -10px; }
   .copyable-tooltip.reason-tooltip { font-size: 12.5px; }
+  .id-mismatch-summary { font-family: Consolas, "Cascadia Mono", monospace; font-size: 11.5px; }
+  .copyable-tooltip.id-mismatch-tooltip { max-width: 520px; line-height: 1.65; font-family: Consolas, "Cascadia Mono", monospace; }
   /* 热区向下延伸，覆盖住浮层与原文字之间的间隙，确保鼠标移动时悬浮不断开、不抖动 */
   .copyable-tooltip::before { content: ''; position: absolute; top: -10px; left: -10px; right: -10px; bottom: -15px; z-index: -1; }
   .tooltip-wrapper:hover .copyable-tooltip { display: block; }
@@ -272,8 +282,11 @@ function showToast(msg, isError, persistent) {
   if (t._hideTimer) clearTimeout(t._hideTimer);
   t.textContent = msg;
   t.style.background = isError ? '#c0392b' : '#333';
+  t.style.cursor = isError ? 'pointer' : 'default';
+  t.title = isError ? '点击关闭' : '';
+  t.onclick = isError ? function() { t.classList.remove('show'); } : null;
   t.classList.add('show');
-  if (!persistent) t._hideTimer = setTimeout(() => t.classList.remove('show'), 1600);
+  if (!persistent && !isError) t._hideTimer = setTimeout(() => t.classList.remove('show'), 4000);
 }
 
 async function submitRule(evt) {
@@ -580,8 +593,9 @@ async function saveCloudSettings(evt) {
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || '云端链接保存失败');
     navigating = true;
-    setCloudSaveBusy(true, `同步完成：白 ${data.whiteCount}｜待 ${data.pendingCount}｜黑 ${data.blackCount}，正在刷新页面…`);
-    showToast(`云端清单已验证：白 ${data.whiteCount}｜待 ${data.pendingCount}｜黑 ${data.blackCount}，正在刷新...`, false);
+    const warningText = Number(data.warningCount || 0) > 0 ? `｜跳过无效 ${data.warningCount}` : '';
+    setCloudSaveBusy(true, `同步完成：白 ${data.whiteCount}｜待 ${data.pendingCount}｜黑 ${data.blackCount}${warningText}，正在刷新页面…`);
+    showToast(`云端清单已验证：白 ${data.whiteCount}｜待 ${data.pendingCount}｜黑 ${data.blackCount}${warningText}，正在刷新...`, false);
     setTimeout(() => { window.location.href = '/'; }, 700);
   } catch (e) {
     showToast('云端设置失败: ' + e.message, true);
@@ -603,7 +617,8 @@ async function syncCloudRules() {
       openCloudModal();
       return;
     }
-    showToast(data.usingCache ? '云端暂时不可用，已使用上次完整快照，正在刷新...' : `同步完成：验证了 ${data.count} 条规则，正在刷新...`, false);
+    const warningText = Number(data.warningCount || 0) > 0 ? `，跳过 ${data.warningCount} 条无效规则` : '';
+    showToast(data.usingCache ? '云端暂时不可用，已使用上次完整快照，正在刷新...' : `同步完成：验证了 ${data.count} 条规则${warningText}，正在刷新...`, false);
     setTimeout(() => { window.location.href = '/'; }, 1000);
   } catch (e) {
     showToast('云端同步失败，本地清单未改变: ' + e.message, true);
